@@ -1,0 +1,12 @@
+{
+  // BatKill — OpenCode 项目配置
+  "$schema": "https://opencode.ai/opencode.json",
+  "agent": {
+    "instructions": "BatKill 是 macOS 菜单栏工具，在电池时自动停止指定软件、接入交流电时自动恢复。修改前请阅读 AGENTS.md 了解完整项目上下文。",
+    "subagents": {
+      "explore": {
+        "max_depth": 2
+      }
+    }
+  }
+}
