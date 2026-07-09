@@ -43,10 +43,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowAllowed    = false   // true = user clicked "Show Window"
     private var cancellables     = Set<AnyCancellable>()
 
+    // ── Power‑action queue ──
+    private var pendingPowerAction: Bool?     // nil=none, true=battery(kill), false=AC(restore)
+    private var powerActionInProgress = false
+    private var powerDelayTimer: Timer?
+    private let powerActionDelaySeconds: TimeInterval = 5
+
+    // ──────────────────────────────────────────────
+    // MARK: - Single Instance
+    // ──────────────────────────────────────────────
+    /// Checks if another instance of BatKill is already running.
+    /// If so, activates the existing instance and terminates this one.
+    /// Returns true when the current instance should stop launching.
+    private func enforceSingleInstance() -> Bool {
+        let current = NSRunningApplication.current
+        let bundleID = current.bundleIdentifier ?? ""
+        for app in NSWorkspace.shared.runningApplications {
+            if app.bundleIdentifier == bundleID && app != current {
+                logger("enforceSingleInstance: found existing instance, activating & exiting")
+                if #available(macOS 14.0, *) {
+                    app.activate()
+                } else {
+                    app.activate(options: .activateIgnoringOtherApps)
+                }
+                NSApp.terminate(nil)
+                return true
+            }
+        }
+        return false
+    }
+
     // ──────────────────────────────────────────────
     // MARK: - Launch
     // ──────────────────────────────────────────────
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 0. Single-instance enforcement
+        if enforceSingleInstance() { return }
+
         // 1. Menu bar
         let mgr = MenuBarManager()
         menuBarManager = mgr
@@ -92,7 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // ──────────────────────────────────────────────
     private func observeStateChanges() {
         batteryMonitor.$isOnBattery
-            .sink { [weak self] _ in self?.refreshBadge(); self?.handlePowerTransition() }
+            .sink { [weak self] newValue in
+                guard let self = self, appLister.hasLoaded else { return }
+                self.refreshBadge()
+                self.queuePowerAction(isOnBattery: newValue)
+            }
             .store(in: &cancellables)
         appLister.$apps
             .sink { [weak self] _ in self?.refreshBadge() }
@@ -104,7 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] loaded in
                 guard loaded, let self = self, !self.hasAppeared else { return }
                 self.hasAppeared = true
-                self.handleInitialState()
+                self.refreshBadge()
+                self.queuePowerAction(isOnBattery: batteryMonitor.isOnBattery)
             }
             .store(in: &cancellables)
     }
@@ -112,32 +150,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshBadge() {
         guard appLister.hasLoaded else { return }
         let count = batteryMonitor.isOnBattery
-            ? processKiller.pendingRestoreCount
-            : appLister.apps.filter { $0.isSelected && $0.isRunning }.count
+            ? appLister.apps.filter { $0.isSelected && $0.isRunning }.count
+            : processKiller.pendingRestoreCount
         menuBarManager?.updateBadge(count: count)
     }
 
     // ──────────────────────────────────────────────
-    // MARK: - Power / initial logic
+    // MARK: - Power‑action queue
     // ──────────────────────────────────────────────
     private var autoKillEnabled: Bool { UserDefaults.standard.bool(forKey: "autoKillEnabled") }
 
-    private func handleInitialState() {
-        logger("handleInitialState: isOnBattery=\(batteryMonitor.isOnBattery) autoKillEnabled=\(autoKillEnabled)")
-        if batteryMonitor.isOnBattery {
-            if autoKillEnabled { processKiller.killSelected(appLister.apps) }
+    /// Enqueue a power‑state transition.
+    /// Rapid successive calls coalesce — only the **latest** state is retained.
+    private func queuePowerAction(isOnBattery: Bool) {
+        logger("queuePowerAction: isOnBattery=\(isOnBattery) inProgress=\(powerActionInProgress) hasTimer=\(powerDelayTimer != nil) hadPending=\(pendingPowerAction != nil)")
+        pendingPowerAction = isOnBattery
+        processNextPowerAction()
+    }
+
+    /// Process the next queued action when idle and not in delay period.
+    private func processNextPowerAction() {
+        guard !powerActionInProgress, powerDelayTimer == nil, let onBattery = pendingPowerAction else {
+            return
+        }
+
+        pendingPowerAction = nil
+        powerActionInProgress = true
+        logger("processNextPowerAction: executing for isOnBattery=\(onBattery)")
+
+        if onBattery {
+            if autoKillEnabled {
+                processKiller.killSelected(appLister.apps) { [weak self] in
+                    self?.onPowerActionCompleted()
+                }
+            } else {
+                onPowerActionCompleted()
+            }
         } else {
-            processKiller.restoreKilledApps(using: appLister.apps)
+            processKiller.restoreKilledApps(using: appLister.apps) { [weak self] in
+                self?.onPowerActionCompleted()
+            }
         }
     }
 
-    private func handlePowerTransition() {
-        guard appLister.hasLoaded else { logger("handlePowerTransition skipped: hasLoaded=false"); return }
-        logger("handlePowerTransition: isOnBattery=\(batteryMonitor.isOnBattery) autoKillEnabled=\(autoKillEnabled)")
-        if batteryMonitor.isOnBattery {
-            if autoKillEnabled { processKiller.killSelected(appLister.apps) }
-        } else {
-            processKiller.restoreKilledApps(using: appLister.apps)
+    /// Called on main thread when the current kill/restore finishes or is skipped.
+    private func onPowerActionCompleted() {
+        powerActionInProgress = false
+        logger("onPowerActionCompleted: pending=\(pendingPowerAction != nil), starting \(powerActionDelaySeconds)s delay")
+
+        guard pendingPowerAction != nil else { return }
+
+        powerDelayTimer = Timer.scheduledTimer(withTimeInterval: powerActionDelaySeconds, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.powerDelayTimer = nil
+            logger("onPowerActionCompleted: delay ended, processing next")
+            self.processNextPowerAction()
         }
     }
 }

@@ -35,9 +35,13 @@ final class ProcessKiller: ObservableObject {
     // ──────────────────────────────────────────────
     // MARK: - Kill (Public API)
     // ──────────────────────────────────────────────
-    func killSelected(_ apps: [AppItem], trackForRestore: Bool = true) {
+    func killSelected(_ apps: [AppItem], trackForRestore: Bool = true, completion: (() -> Void)? = nil) {
         let selected = apps.filter { $0.isSelected && $0.isRunning }
-        guard !selected.isEmpty else { logger("killSelected: no selected+running apps, skipped"); return }
+        guard !selected.isEmpty else {
+            logger("killSelected: no selected+running apps, skipped")
+            DispatchQueue.main.async { completion?() }
+            return
+        }
         logger("killSelected: killing \(selected.map(\.name))")
 
         isKilling = true
@@ -68,6 +72,7 @@ final class ProcessKiller: ObservableObject {
                 self.killCount += results.values.filter { $0 }.count
                 self.isKilling = false
                 self.postKillNotification(results: results)
+                completion?()
             }
         }
     }
@@ -75,9 +80,13 @@ final class ProcessKiller: ObservableObject {
     // ──────────────────────────────────────────────
     // MARK: - Restore (Public API)
     // ──────────────────────────────────────────────
-    func restoreKilledApps(using apps: [AppItem]) {
+    func restoreKilledApps(using apps: [AppItem], completion: (() -> Void)? = nil) {
         let paths = killedRestorePaths
-        guard !paths.isEmpty else { logger("restoreKilledApps: no paths to restore, skipped"); return }
+        guard !paths.isEmpty else {
+            logger("restoreKilledApps: no paths to restore, skipped")
+            DispatchQueue.main.async { completion?() }
+            return
+        }
         logger("restoreKilledApps: restoring \(paths)")
         isRestoring = true
 
@@ -86,11 +95,6 @@ final class ProcessKiller: ObservableObject {
             var restoredNames: [String] = []
 
             for appId in paths {
-                // Skip if app no longer in selected list (user unchecked it)
-                if let app = apps.first(where: { $0.id == appId }), !app.isSelected {
-                    logger("restoreKilledApps: skip \(appId) — not selected")
-                    continue
-                }
                 if let name = self.restoreSingleApp(appId, using: apps) {
                     restoredNames.append(name)
                 }
@@ -103,6 +107,7 @@ final class ProcessKiller: ObservableObject {
                 if !restoredNames.isEmpty {
                     self.postRestoreNotification(names: restoredNames)
                 }
+                completion?()
             }
         }
     }
