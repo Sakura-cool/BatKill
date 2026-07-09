@@ -112,8 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshBadge() {
         guard appLister.hasLoaded else { return }
         let count = batteryMonitor.isOnBattery
-            ? processKiller.pendingRestoreCount
-            : appLister.apps.filter { $0.isSelected && $0.isRunning }.count
+            ? appLister.apps.filter { $0.isSelected && $0.isRunning }.count
+            : processKiller.pendingRestoreCount
         menuBarManager?.updateBadge(count: count)
     }
 
@@ -123,19 +123,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var autoKillEnabled: Bool { UserDefaults.standard.bool(forKey: "autoKillEnabled") }
 
     private func handleInitialState() {
+        logger("handleInitialState: isOnBattery=\(batteryMonitor.isOnBattery) autoKillEnabled=\(autoKillEnabled)")
         if batteryMonitor.isOnBattery {
-            if autoKillEnabled { processKiller.killSelected(appLister.apps) }
-        } else {
             processKiller.restoreKilledApps(using: appLister.apps)
+        } else {
+            if autoKillEnabled { processKiller.killSelected(appLister.apps) }
         }
     }
 
     private func handlePowerTransition() {
-        guard appLister.hasLoaded else { return }
+        guard appLister.hasLoaded else { logger("handlePowerTransition skipped: hasLoaded=false"); return }
+        logger("handlePowerTransition: isOnBattery=\(batteryMonitor.isOnBattery) autoKillEnabled=\(autoKillEnabled)")
         if batteryMonitor.isOnBattery {
-            if autoKillEnabled { processKiller.killSelected(appLister.apps) }
-        } else {
             processKiller.restoreKilledApps(using: appLister.apps)
+        } else {
+            if autoKillEnabled { processKiller.killSelected(appLister.apps) }
         }
     }
 }

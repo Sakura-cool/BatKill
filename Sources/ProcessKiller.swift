@@ -37,7 +37,8 @@ final class ProcessKiller: ObservableObject {
     // ──────────────────────────────────────────────
     func killSelected(_ apps: [AppItem], trackForRestore: Bool = true) {
         let selected = apps.filter { $0.isSelected && $0.isRunning }
-        guard !selected.isEmpty else { return }
+        guard !selected.isEmpty else { logger("killSelected: no selected+running apps, skipped"); return }
+        logger("killSelected: killing \(selected.map(\.name))")
 
         isKilling = true
 
@@ -76,8 +77,8 @@ final class ProcessKiller: ObservableObject {
     // ──────────────────────────────────────────────
     func restoreKilledApps(using apps: [AppItem]) {
         let paths = killedRestorePaths
-        guard !paths.isEmpty else { return }
-
+        guard !paths.isEmpty else { logger("restoreKilledApps: no paths to restore, skipped"); return }
+        logger("restoreKilledApps: restoring \(paths)")
         isRestoring = true
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in

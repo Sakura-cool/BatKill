@@ -2,6 +2,20 @@ import Foundation
 import IOKit.ps
 import Combine
 
+/// Simple file‑based logger (appends to /tmp/batkill.log)
+func logger(_ msg: String) {
+    let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+    if let data = "[\(ts)] \(msg)\n".data(using: .utf8) {
+        if let fh = FileHandle(forWritingAtPath: "/tmp/batkill.log") {
+            fh.seekToEndOfFile()
+            fh.write(data)
+            try? fh.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: "/tmp/batkill.log"), options: .atomic)
+        }
+    }
+}
+
 /// Observes the Mac power source and publishes battery/AC state.
 final class BatteryMonitor: ObservableObject {
     @Published var isOnBattery: Bool = false
@@ -43,8 +57,10 @@ final class BatteryMonitor: ObservableObject {
 
             if let state = desc[kIOPSPowerSourceStateKey] as? String {
                 let onBattery = (state == kIOPSBatteryPowerValue)
+                logger("IOKit state=\(state) → onBattery=\(onBattery) (prev=\(self.isOnBattery))")
                 powerSource = onBattery ? "Battery" : "AC Power"
                 if isOnBattery != onBattery {
+                    logger("⚡ isOnBattery changed: \(self.isOnBattery) → \(onBattery)")
                     isOnBattery = onBattery
                 }
             }
