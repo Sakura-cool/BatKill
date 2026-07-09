@@ -1,0 +1,12 @@
+# Build artifacts
+.build/
+*.o
+*.d
+
+# macOS
+.DS_Store
+*.swp
+*.swo
+
+# Temp
+*/Icon/Sources/.build/
