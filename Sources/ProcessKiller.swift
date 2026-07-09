@@ -143,38 +143,30 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
-    /// Gracefully quit a GUI application, then force if needed.
+    /// Force‑kill a GUI application — no AppleScript (skips confirmation dialogs).
     private func killApplication(_ app: AppItem) -> Bool {
-        // 1. AppleScript graceful quit
-        let script = "tell application \"\(escapeAppleScript(app.name))\" to quit"
-        var err: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&err)
-
-        Thread.sleep(forTimeInterval: 0.5)
-
-        // 2. Check if still alive by PID
-        if let pid = app.pid, !isAlive(pid) { return true }
-
-        // 3. NSRunningApplication terminate
+        // 1. NSRunningApplication
         if let bid = app.bundleIdentifier {
             let running = NSRunningApplication.runningApplications(withBundleIdentifier: bid)
             running.forEach { $0.terminate() }
-            Thread.sleep(forTimeInterval: 0.5)
+            Thread.sleep(forTimeInterval: 0.3)
             if NSRunningApplication.runningApplications(withBundleIdentifier: bid).isEmpty { return true }
             running.forEach { $0.forceTerminate() }
             Thread.sleep(forTimeInterval: 0.3)
-            return NSRunningApplication.runningApplications(withBundleIdentifier: bid).isEmpty
+            if NSRunningApplication.runningApplications(withBundleIdentifier: bid).isEmpty { return true }
         }
 
-        // 4. Last resort: SIGKILL via PID
+        // 2. SIGTERM + SIGKILL
         if let pid = app.pid {
-            kill(pid, SIGTERM); Thread.sleep(forTimeInterval: 0.3)
+            kill(pid, SIGTERM)
+            Thread.sleep(forTimeInterval: 0.2)
             if !isAlive(pid) { return true }
-            kill(pid, SIGKILL); Thread.sleep(forTimeInterval: 0.2)
+            kill(pid, SIGKILL)
+            Thread.sleep(forTimeInterval: 0.2)
             return !isAlive(pid)
         }
 
-        // 5. Kill by process name
+        // 3. killall
         return killall(app.processName)
     }
 
