@@ -86,6 +86,11 @@ final class ProcessKiller: ObservableObject {
             var restoredNames: [String] = []
 
             for appId in paths {
+                // Skip if app no longer in selected list (user unchecked it)
+                if let app = apps.first(where: { $0.id == appId }), !app.isSelected {
+                    logger("restoreKilledApps: skip \(appId) — not selected")
+                    continue
+                }
                 if let name = self.restoreSingleApp(appId, using: apps) {
                     restoredNames.append(name)
                 }

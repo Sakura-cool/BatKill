@@ -115,9 +115,9 @@ struct PopoverView: View {
     // ── Computed values ──
     private var badgeCount: Int {
         if batteryMonitor.isOnBattery {
-            return appLister.apps.filter { $0.isSelected && $0.isRunning }.count
-        } else {
             return processKiller.pendingRestoreCount
+        } else {
+            return appLister.apps.filter { $0.isSelected && $0.isRunning }.count
         }
     }
 
@@ -131,13 +131,13 @@ struct PopoverView: View {
     private var explanationText: String {
         if batteryMonitor.isOnBattery {
             return lm.translate(
-                "\(badgeCount) app(s) will be killed on battery",
-                "\(badgeCount) 个应用将在电池时停止"
+                "\(badgeCount) app(s) will restore on AC",
+                "\(badgeCount) 个应用将在接电时恢复"
             )
         } else {
             return lm.translate(
-                "\(badgeCount) app(s) will restore on AC",
-                "\(badgeCount) 个应用将在接电时恢复"
+                "\(badgeCount) app(s) will be killed on battery",
+                "\(badgeCount) 个应用将在电池时停止"
             )
         }
     }
