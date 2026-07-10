@@ -138,6 +138,21 @@ final class ProcessKiller: ObservableObject {
             return app.name
         }
 
+        else if appId.hasPrefix("brew:") {
+            let name = String(appId.dropFirst("brew:".count))
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/bash")
+            task.arguments = ["-l", "-c", "brew services start \(name)"]
+            task.standardOutput = Pipe()
+            task.standardError = Pipe()
+            try? task.run()
+            task.waitUntilExit()
+            if task.terminationStatus == 0 {
+                return apps.first(where: { $0.id == appId })?.name ?? name
+            }
+            return nil
+        }
+
         // services: skip — they are managed by launchd / brew
         return nil
     }
@@ -149,7 +164,7 @@ final class ProcessKiller: ObservableObject {
         switch app.category {
         case .application:  return killApplication(app)
         case .launchAgent:  return unloadLaunchAgent(app)
-        case .service:      return killProcessByPid(app)
+        case .service:      return app.id.hasPrefix("brew:") ? stopBrewService(app) : killProcessByPid(app)
         case .custom:       return killProcessByPid(app)
         }
     }
@@ -217,6 +232,18 @@ final class ProcessKiller: ObservableObject {
 
     private func killall(_ name: String) -> Bool {
         killProcessByName(name)
+    }
+
+    private func stopBrewService(_ app: AppItem) -> Bool {
+        let name = app.processName
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/bash")
+        task.arguments = ["-l", "-c", "brew services stop \(name)"]
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        guard (try? task.run()) != nil else { return false }
+        task.waitUntilExit()
+        return task.terminationStatus == 0
     }
 
     // ──────────────────────────────────────────────

@@ -157,6 +157,24 @@ final class AppLister: ObservableObject {
             ))
         }
 
+        // ── 5. Brew installed services (running) ──
+        let brewServices = self.brewRunningServices()
+        for svc in brewServices {
+            let brewId = "brew:\(svc.name)"
+            guard seen.insert(brewId).inserted else { continue }
+            result.append(AppItem(
+                name: svc.name,
+                bundleIdentifier: nil,
+                path: "/opt/homebrew/opt/\(svc.name)",
+                processName: svc.name,
+                isRunning: true,
+                isSelected: savedPaths.contains(brewId),
+                isSystemApp: false,
+                category: .service,
+                pid: svc.pid
+            ))
+        }
+
         // ── Sort: running first, then A–Z ──
         result.sort { a, b in
             if a.isRunning != b.isRunning { return a.isRunning && !b.isRunning }
@@ -223,6 +241,48 @@ final class AppLister: ObservableObject {
                 let name = label.components(separatedBy: ".").last ?? label
                 services.append((name, pid))
             }
+        }
+        return services
+    }
+
+    private func shellExec(_ command: String) -> String {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/bash")
+        task.arguments = ["-l", "-c", command]
+        let out = Pipe()
+        task.standardOutput = out
+        task.standardError = Pipe()
+        guard (try? task.run()) != nil else { return "" }
+        task.waitUntilExit()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private func brewRunningServices() -> [(name: String, pid: Int32)] {
+        let output = shellExec("ps -eo pid,args | grep /opt/homebrew/ | grep -v grep")
+        var seenNames = Set<String>()
+        var services: [(String, Int32)] = []
+
+        for line in output.components(separatedBy: .newlines) where !line.isEmpty {
+            let parts = line.split(separator: " ", maxSplits: 1)
+            guard parts.count >= 2,
+                  let pid = Int32(parts[0].trimmingCharacters(in: .whitespaces)) else { continue }
+            let cmd = String(parts[1])
+
+            guard let range = cmd.range(of: "/opt/homebrew/") else { continue }
+            let rest = String(cmd[range.upperBound...])
+            let components = rest.split(separator: "/")
+            guard !components.isEmpty else { continue }
+
+            var name = String(components[0])
+            if name == "bin" || name == "sbin", components.count > 1 {
+                name = String(components[1])
+            } else if name == "opt", components.count > 2 {
+                name = String(components[2])
+            }
+
+            guard !name.isEmpty, seenNames.insert(name).inserted else { continue }
+            services.append((name, pid))
         }
         return services
     }
