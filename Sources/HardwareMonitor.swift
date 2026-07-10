@@ -78,15 +78,44 @@ final class HardwareMonitor: ObservableObject {
 
     func setFanMode(fanIndex: Int, auto: Bool) {
         let key = String(format: "F%dMd", fanIndex)
-        var value: UInt8 = auto ? 0 : 1
-        writeBytes(key: key, bytes: &value, length: 1)
+        let dataType = readDataType(key: key)
+        let fltType = fourCharCode("flt ")
+        let fdsType = fourCharCode("{fds")
+        let fpe2Type = fourCharCode("fpe2")
+
+        if dataType == fltType {
+            var value: Float32 = auto ? 0.0 : 1.0
+            _ = writeBytes(key: key, bytes: &value, length: 4)
+        } else if dataType == fdsType || dataType == fpe2Type {
+            var value: UInt16 = auto ? 0 : UInt16(1 << 14)
+            _ = writeBytes(key: key, bytes: &value, length: 2)
+        } else {
+            var value: UInt8 = auto ? 0 : 1
+            _ = writeBytes(key: key, bytes: &value, length: 1)
+        }
         refresh()
     }
 
     func setFanSpeed(fanIndex: Int, speed: Double) {
         let key = String(format: "F%dTg", fanIndex)
-        var value = UInt16(Int(speed))
-        writeBytes(key: key, bytes: &value, length: 2)
+        let dataType = readDataType(key: key)
+        let fltType = fourCharCode("flt ")
+        let fdsType = fourCharCode("{fds")
+        let fpe2Type = fourCharCode("fpe2")
+
+        if dataType == fltType {
+            var value = Float32(speed)
+            _ = writeBytes(key: key, bytes: &value, length: 4)
+        } else if dataType == fdsType {
+            var value = UInt16(speed * 4.0)
+            _ = writeBytes(key: key, bytes: &value, length: 2)
+        } else if dataType == fpe2Type {
+            var value = UInt16(speed * 64.0)
+            _ = writeBytes(key: key, bytes: &value, length: 2)
+        } else {
+            var value = UInt16(Int(speed))
+            _ = writeBytes(key: key, bytes: &value, length: 2)
+        }
         refresh()
     }
 
@@ -162,8 +191,8 @@ final class HardwareMonitor: ObservableObject {
         return output.keyInfo.dataType
     }
 
-    private func writeBytes(key: String, bytes: UnsafeRawPointer, length: Int) {
-        guard let fourChar = keyToFourCharCode(key) else { return }
+    private func writeBytes(key: String, bytes: UnsafeRawPointer, length: Int) -> Bool {
+        guard let fourChar = keyToFourCharCode(key) else { return false }
 
         var input = SMCParamStruct()
         input.key = fourChar
@@ -173,7 +202,7 @@ final class HardwareMonitor: ObservableObject {
         var outSize = MemoryLayout<SMCParamStruct>.size
 
         var kr = IOConnectCallStructMethod(connection, 2, &input, MemoryLayout<SMCParamStruct>.size, &output, &outSize)
-        guard kr == kIOReturnSuccess else { return }
+        guard kr == kIOReturnSuccess else { return false }
 
         var writeInput = SMCParamStruct()
         writeInput.key = fourChar
@@ -187,6 +216,7 @@ final class HardwareMonitor: ObservableObject {
         }
 
         kr = IOConnectCallStructMethod(connection, 2, &writeInput, MemoryLayout<SMCParamStruct>.size, &output, &outSize)
+        return kr == kIOReturnSuccess
     }
 
     // MARK: - Temperature Reading
@@ -245,10 +275,38 @@ final class HardwareMonitor: ObservableObject {
     private func readTemperature(key: String) -> Double? {
         guard let bytes = readBytes(key: key), bytes.count >= 2 else { return nil }
 
-        let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
-        let temp = Double(raw) / 256.0
+        let dataType = readDataType(key: key)
+        let fltType = fourCharCode("flt ")
+        let fdsType = fourCharCode("{fds")
+        let fpe2Type = fourCharCode("fpe2")
+        let sp78Type = fourCharCode("sp78")
+        let ui16Type = fourCharCode("ui16")
+        let ui8Type  = fourCharCode("ui8 ")
 
-        guard temp > -128 && temp < 200 else { return nil }
+        var temp: Double = 0
+
+        if dataType == fltType, bytes.count >= 4 {
+            temp = Double(bytes.withUnsafeBytes { $0.load(fromByteOffset: 0, as: Float32.self) })
+        } else if dataType == sp78Type {
+            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            temp = Double(raw) / 256.0
+        } else if dataType == fdsType {
+            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            temp = Double(raw) / 4.0
+        } else if dataType == fpe2Type {
+            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            temp = Double(raw) / 64.0
+        } else if dataType == ui16Type {
+            let raw = Int(bytes[0]) << 8 | Int(bytes[1])
+            temp = Double(raw)
+        } else if dataType == ui8Type {
+            temp = Double(bytes[0])
+        } else {
+            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            temp = Double(raw) / 256.0
+        }
+
+        guard temp > -40 && temp < 150 else { return nil }
         return temp
     }
 
