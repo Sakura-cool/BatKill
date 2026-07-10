@@ -103,6 +103,10 @@ final class HardwareMonitor: ObservableObject {
     @Published var fans: [FanInfo] = []
     @Published var isAvailable = false
     @Published var lastFanWriteOK = false
+    @Published var thermalThrottled = false
+    @Published var maxCPUTemp: Double = 0
+
+    var onThermalThrottle: (() -> Void)?
 
     private var connection: io_connect_t = 0
 
@@ -135,6 +139,17 @@ final class HardwareMonitor: ObservableObject {
     func refresh() {
         temperatures = readTemperatures()
         fans = readFans()
+
+        let cpuTemps = temperatures.filter { $0.category == .cpu && !$0.name.contains("Aggregate") }.map(\.temperature)
+        maxCPUTemp = cpuTemps.max() ?? 0
+    }
+
+    func checkThreshold(_ threshold: Double) {
+        let wasThrottled = thermalThrottled
+        thermalThrottled = maxCPUTemp >= threshold
+        if thermalThrottled && !wasThrottled {
+            onThermalThrottle?()
+        }
     }
 
     // MARK: - Fan Control (direct SMC, no admin)
