@@ -175,28 +175,43 @@ struct TemperatureView: View {
             .font(.caption2)
             .foregroundColor(.secondary)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 6) {
                 Text(lm.translate("Threshold:", "阈值:"))
                     .font(.caption)
-                    .frame(width: 50, alignment: .trailing)
 
-                TextField("60-120", text: $thresholdInput)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(width: 50)
-                    .multilineTextAlignment(.center)
-                    .onSubmit {
-                        let digits = thresholdInput.filter(\.isNumber)
-                        if let val = Int(digits) {
-                            let clamped = min(120, max(60, val))
-                            thresholdStore.threshold = Double(clamped)
+                Stepper(
+                    value: Binding(
+                        get: { thresholdStore.threshold },
+                        set: { newVal in
+                            let clamped = min(120, max(60, newVal))
+                            thresholdStore.threshold = clamped
+                            thresholdInput = "\(Int(clamped))"
                         }
-                        thresholdInput = "\(Int(thresholdStore.threshold))"
+                    ),
+                    in: 60...120,
+                    step: 1
+                ) {
+                    HStack(spacing: 2) {
+                        TextField("60-120", text: $thresholdInput)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(width: 36)
+                            .multilineTextAlignment(.center)
+                            .onSubmit {
+                                let digits = thresholdInput.filter(\.isNumber)
+                                if let val = Int(digits) {
+                                    let clamped = min(120, max(60, val))
+                                    thresholdStore.threshold = Double(clamped)
+                                }
+                                thresholdInput = "\(Int(thresholdStore.threshold))"
+                            }
+                        Text("°C")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
+                }
 
-                Text("°C")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Spacer()
 
                 if hardwareMonitor.thermalThrottled {
                     Text(lm.translate("⚠️ Overheat Danger!", "⚠️ 过温危险!"))
@@ -204,11 +219,9 @@ struct TemperatureView: View {
                         .foregroundColor(.red)
                 }
 
-                Spacer()
-
                 let cpuTemp = hardwareMonitor.maxCPUTemp
                 HStack(spacing: 4) {
-                    Text(lm.translate("CPU:", "CPU:"))
+                    Text(lm.translate("CPU avg:", "CPU平均:"))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Text(String(format: "%.1f°C", cpuTemp))
