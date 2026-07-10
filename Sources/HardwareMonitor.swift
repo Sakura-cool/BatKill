@@ -351,82 +351,16 @@ final class HardwareMonitor: ObservableObject {
             }
         }
 
-        let discovered = discoverTemperatureKeys(excluding: seen)
-        for (key, data) in discovered {
-            let (name, category) = classifyTempKey(key)
-            if let sensor = decodeTempFromData(data, key: key, name: name, category: category) {
-                results.append(sensor)
-            }
-        }
-
-        return results
-    }
-
-    private func discoverTemperatureKeys(excluding known: Set<String>) -> [(String, KeyData)] {
-        var results: [(String, KeyData)] = []
-        let prefixes: [Character] = ["T"]
-        let secondChars: [Character] = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
-
-        for prefix in prefixes {
-            for c2 in secondChars {
-                for i1 in 0...9 {
-                    for i2 in 0...9 {
-                        let key = "\(prefix)\(c2)\(i1)\(i2)"
-                        guard !known.contains(key) else { continue }
-                        guard let data = readKeyData(key) else { continue }
-                        guard data.dataSize == 2 || data.dataSize == 4 else { continue }
-                        guard isTempType(data.dataType) else { continue }
-                        results.append((key, data))
-                    }
-                }
-            }
-        }
         return results
     }
 
     private func isTempType(_ dataType: FourCharCode) -> Bool {
-        return dataType == HardwareMonitor.fltType
+        dataType == HardwareMonitor.fltType
             || dataType == HardwareMonitor.fdsType
             || dataType == HardwareMonitor.fpe2Type
             || dataType == HardwareMonitor.sp78Type
             || dataType == HardwareMonitor.fp2eType
             || dataType == HardwareMonitor.fp1aType
-    }
-
-    private func classifyTempKey(_ key: String) -> (String, TemperatureCategory) {
-        let second = key.count > 1 ? key[key.index(key.startIndex, offsetBy: 1)] : " "
-        switch second {
-        case "C", "c": return (friendlyKeyName(key), .cpu)
-        case "G", "g": return (friendlyKeyName(key), .gpu)
-        case "M", "m": return (friendlyKeyName(key), .memory)
-        case "B", "b": return (friendlyKeyName(key), .battery)
-        case "S", "s": return (friendlyKeyName(key), .storage)
-        case "A", "a": return (friendlyKeyName(key), .ambient)
-        case "W", "w": return (friendlyKeyName(key), .other)
-        case "P", "p":
-            if key.hasPrefix("Tp") { return (friendlyKeyName(key), .cpu) }
-            return (friendlyKeyName(key), .other)
-        default: return (friendlyKeyName(key), .other)
-        }
-    }
-
-    private func friendlyKeyName(_ key: String) -> String {
-        let prefix: String
-        let second = key.count > 1 ? String(key[key.index(key.startIndex, offsetBy: 1)]) : ""
-        switch second {
-        case "C", "c": prefix = "CPU"
-        case "G", "g": prefix = "GPU"
-        case "M", "m": prefix = "MEM"
-        case "B", "b": prefix = "BAT"
-        case "S", "s": prefix = "SSD"
-        case "A", "a": prefix = "AMB"
-        case "W", "w": prefix = "WiFi"
-        case "P", "p": prefix = key.hasPrefix("Tp") ? "CPU" : "PWR"
-        case "H", "h": prefix = "HEAT"
-        case "T", "t": prefix = "TS"
-        default: prefix = key
-        }
-        return "\(prefix) \(key.suffix(2))"
     }
 
     private func readTempSensor(key: String, name: String, category: TemperatureCategory) -> TemperatureSensor? {
