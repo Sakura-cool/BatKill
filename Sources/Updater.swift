@@ -142,7 +142,6 @@ final class Updater: ObservableObject {
             }
 
             let currentAppPath = Bundle.main.bundlePath
-            let newBinary = "\(currentAppPath)/Contents/MacOS/BatKill"
 
             let script = """
             #!/bin/bash
@@ -151,17 +150,20 @@ final class Updater: ObservableObject {
                 sleep 0.5
             done
 
+            # Remove quarantine from the NEW app BEFORE copying (recursive)
+            xattr -rd com.apple.quarantine "\(appPath.path)" 2>/dev/null || true
+
             # Remove old bundle
             rm -rf "\(currentAppPath)"
 
-            # Copy new bundle to original location
+            # Copy clean bundle to original location
             ditto "\(appPath.path)" "\(currentAppPath)"
 
             # Ensure executable permission
-            chmod +x "\(newBinary)"
+            chmod +x "\(currentAppPath)/Contents/MacOS/BatKill"
 
-            # Remove quarantine to avoid Gatekeeper block
-            xattr -d com.apple.quarantine "\(currentAppPath)" 2>/dev/null || true
+            # Double-check: remove quarantine on final location too
+            xattr -rd com.apple.quarantine "\(currentAppPath)" 2>/dev/null || true
 
             # Relaunch
             open "\(currentAppPath)"
