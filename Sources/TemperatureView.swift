@@ -14,6 +14,8 @@ struct TemperatureView: View {
     @State private var showingSaveAlert = false
     @State private var newPresetName = ""
     @State private var deleteTarget: FanPreset?
+    @StateObject private var thresholdStore = TemperatureThresholdStore()
+    @State private var thresholdInput: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +29,10 @@ struct TemperatureView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
+                        if hardwareMonitor.thermalThrottled {
+                            thermalWarningBanner
+                        }
+                        thresholdSection
                         temperatureGroups
                         presetSection
                         fanSection
@@ -37,11 +43,26 @@ struct TemperatureView: View {
         }
         .frame(width: 480, height: 600)
         .onAppear {
+            thresholdInput = "\(Int(thresholdStore.threshold))"
             hardwareMonitor.refresh()
+            presetStore.ensureAutoPreset(fanCount: hardwareMonitor.fans.count)
             initFanStates()
             applyPreset(presetStore.activePreset)
+            hardwareMonitor.onThermalThrottle = {
+                guard hardwareMonitor.isAdminAuthorized else { return }
+                var speeds: [Int: Double] = [:]
+                var modes: [Int: Bool] = [:]
+                for fan in hardwareMonitor.fans {
+                    speeds[fan.index] = 0
+                    modes[fan.index] = true
+                }
+                let auto = FanPreset(id: FanPreset.autoModeID, name: "Auto", fanSpeeds: speeds, fanAutoModes: modes)
+                presetStore.update(auto)
+                executePreset(auto)
+            }
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
                 hardwareMonitor.refresh()
+                hardwareMonitor.checkThreshold(thresholdStore.threshold)
             }
         }
         .onDisappear {
@@ -105,6 +126,103 @@ struct TemperatureView: View {
             .multilineTextAlignment(.center)
             Spacer()
         }
+    }
+
+    // MARK: - Thermal Warning
+
+    private var thermalWarningBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.white)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(lm.translate(
+                    "CPU over \(Int(thresholdStore.threshold))°C — fan control released to system",
+                    "CPU 超过 \(Int(thresholdStore.threshold))°C — 风扇控制已交还系统"
+                ))
+                .font(.caption).fontWeight(.medium)
+                .foregroundColor(.white)
+                Text(lm.translate(
+                    "Current: \(String(format: "%.1f", hardwareMonitor.maxCPUTemp))°C",
+                    "当前: \(String(format: "%.1f", hardwareMonitor.maxCPUTemp))°C"
+                ))
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.8))
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.85))
+        .cornerRadius(8)
+    }
+
+    // MARK: - Threshold Section
+
+    private var thresholdSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "thermometer")
+                    .foregroundColor(.orange)
+                    .font(.caption)
+                Text(lm.translate("Fan Temperature Threshold", "风扇温度阈值"))
+                    .font(.subheadline).fontWeight(.medium)
+                Spacer()
+            }
+
+            Text(lm.translate(
+                "When CPU exceeds this temperature, fan control is released to the system.",
+                "当 CPU 超过此温度时，风扇控制将交还系统。"
+            ))
+            .font(.caption2)
+            .foregroundColor(.secondary)
+
+            HStack(spacing: 12) {
+                Text(lm.translate("Threshold:", "阈值:"))
+                    .font(.caption)
+                    .frame(width: 50, alignment: .trailing)
+
+                TextField("60-120", text: $thresholdInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(width: 50)
+                    .multilineTextAlignment(.center)
+                    .onSubmit {
+                        let digits = thresholdInput.filter(\.isNumber)
+                        if let val = Int(digits) {
+                            let clamped = min(120, max(60, val))
+                            thresholdStore.threshold = Double(clamped)
+                        }
+                        thresholdInput = "\(Int(thresholdStore.threshold))"
+                    }
+
+                Text("°C")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if hardwareMonitor.thermalThrottled {
+                    Text(lm.translate("⚠️ Overheat Danger!", "⚠️ 过温危险!"))
+                        .font(.caption).fontWeight(.bold)
+                        .foregroundColor(.red)
+                }
+
+                Spacer()
+
+                let cpuTemp = hardwareMonitor.maxCPUTemp
+                HStack(spacing: 4) {
+                    Text(lm.translate("CPU:", "CPU:"))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text(String(format: "%.1f°C", cpuTemp))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundColor(cpuTemp >= thresholdStore.threshold ? .red : .primary)
+                    Circle()
+                        .fill(cpuTemp >= thresholdStore.threshold ? Color.red : Color.green)
+                        .frame(width: 6, height: 6)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
     }
 
     // MARK: - Temperature Groups
@@ -262,7 +380,14 @@ struct TemperatureView: View {
                                 Image(systemName: presetStore.activePresetID == preset.id ? "checkmark.circle.fill" : "circle")
                                     .foregroundColor(presetStore.activePresetID == preset.id ? .purple : .secondary)
                                     .font(.caption)
-                                Text(preset.name)
+                                if preset.isBuiltIn {
+                                    Image(systemName: "lock.fill")
+                                        .font(.system(size: 8))
+                                        .foregroundColor(.secondary)
+                                }
+                                Text(preset.isBuiltIn
+                                    ? lm.translate("Auto Mode", "自动模式")
+                                    : preset.name)
                                     .font(.caption)
                             }
                         }
@@ -288,13 +413,15 @@ struct TemperatureView: View {
                         }
                         .buttonStyle(.plain)
 
-                        Button {
-                            deleteTarget = preset
-                        } label: {
-                            Image(systemName: "trash")
-                                .foregroundColor(.secondary)
+                        if !preset.isBuiltIn {
+                            Button {
+                                deleteTarget = preset
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                     .padding(.vertical, 2)
 
@@ -400,6 +527,7 @@ struct TemperatureView: View {
                 Picker("", selection: Binding(
                     get: { isManual },
                     set: { newValue in
+                        if newValue && hardwareMonitor.thermalThrottled { return }
                         fanManualModes[fan.index] = newValue
                         fanWriteStatus[fan.index] = nil
                         fanNeedsAdmin[fan.index] = nil
@@ -427,7 +555,7 @@ struct TemperatureView: View {
                 .frame(width: 120)
             }
 
-            if isManual {
+            if isManual && !hardwareMonitor.thermalThrottled {
                 HStack(spacing: 8) {
                     Image(systemName: "minus")
                         .font(.caption2)

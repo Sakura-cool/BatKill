@@ -39,9 +39,13 @@ struct FanPreset: Codable, Identifiable, Equatable {
     var fanSpeeds: [Int: Double]
     var fanAutoModes: [Int: Bool]
 
+    static let autoModeID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+
     static func == (lhs: FanPreset, rhs: FanPreset) -> Bool {
         lhs.id == rhs.id
     }
+
+    var isBuiltIn: Bool { id == Self.autoModeID }
 }
 
 final class FanPresetStore: ObservableObject {
@@ -57,9 +61,36 @@ final class FanPresetStore: ObservableObject {
 
     func load() {
         guard let data = UserDefaults.standard.data(forKey: presetsKey),
-              let decoded = try? JSONDecoder().decode([FanPreset].self, from: data) else { return }
+              let decoded = try? JSONDecoder().decode([FanPreset].self, from: data) else {
+            ensureAutoPreset(fanCount: 2)
+            return
+        }
         presets = decoded
         activePresetID = UserDefaults.standard.string(forKey: activeKey).flatMap { UUID(uuidString: $0) }
+        ensureAutoPreset(fanCount: 2)
+    }
+
+    func ensureAutoPreset(fanCount: Int) {
+        if !presets.contains(where: { $0.isBuiltIn }) {
+            var speeds: [Int: Double] = [:]
+            var modes: [Int: Bool] = [:]
+            for i in 0..<fanCount {
+                speeds[i] = 0
+                modes[i] = true
+            }
+            let auto = FanPreset(id: FanPreset.autoModeID, name: "Auto", fanSpeeds: speeds, fanAutoModes: modes)
+            presets.insert(auto, at: 0)
+            save()
+        } else if let idx = presets.firstIndex(where: { $0.isBuiltIn }) {
+            var modes = presets[idx].fanAutoModes
+            if modes.count != fanCount {
+                for i in 0..<fanCount {
+                    modes[i] = true
+                }
+                presets[idx].fanAutoModes = modes
+                save()
+            }
+        }
     }
 
     func save() {
@@ -79,6 +110,7 @@ final class FanPresetStore: ObservableObject {
     }
 
     func remove(_ preset: FanPreset) {
+        guard !preset.isBuiltIn else { return }
         presets.removeAll { $0.id == preset.id }
         if activePresetID == preset.id { activePresetID = nil }
         save()
@@ -86,7 +118,8 @@ final class FanPresetStore: ObservableObject {
 
     func update(_ preset: FanPreset) {
         if let idx = presets.firstIndex(where: { $0.id == preset.id }) {
-            presets[idx] = preset
+            presets[idx].fanSpeeds = preset.fanSpeeds
+            presets[idx].fanAutoModes = preset.fanAutoModes
             save()
         }
     }
@@ -98,5 +131,24 @@ final class FanPresetStore: ObservableObject {
 
     var activePreset: FanPreset? {
         presets.first { $0.id == activePresetID }
+    }
+
+    var autoModePreset: FanPreset? {
+        presets.first { $0.isBuiltIn }
+    }
+}
+
+// MARK: - Temperature Threshold Store
+final class TemperatureThresholdStore: ObservableObject {
+    @Published var threshold: Double {
+        didSet { UserDefaults.standard.set(threshold, forKey: key) }
+    }
+
+    private let key = "fanTemperatureThreshold"
+    private let defaultValue: Double = 98
+
+    init() {
+        let stored = UserDefaults.standard.double(forKey: key)
+        self.threshold = stored > 0 ? stored : 98
     }
 }
