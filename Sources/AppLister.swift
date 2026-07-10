@@ -157,18 +157,18 @@ final class AppLister: ObservableObject {
             ))
         }
 
-        // ── 5. Brew installed services (running) ──
-        let brewServices = self.brewRunningServices()
+        // ── 5. Brew services (all, running or stopped) ──
+        let brewServices = self.brewAllServices()
         for svc in brewServices {
-            let brewId = "brew:\(svc.name)"
-            guard seen.insert(brewId).inserted else { continue }
+            let svcId = "service:\(svc.name)"
+            guard seen.insert(svcId).inserted else { continue }
             result.append(AppItem(
                 name: svc.name,
                 bundleIdentifier: nil,
                 path: "/opt/homebrew/opt/\(svc.name)",
                 processName: svc.name,
-                isRunning: true,
-                isSelected: savedPaths.contains(brewId),
+                isRunning: svc.isRunning,
+                isSelected: savedPaths.contains(svcId),
                 isSystemApp: false,
                 category: .service,
                 pid: svc.pid
@@ -258,34 +258,51 @@ final class AppLister: ObservableObject {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    private func brewRunningServices() -> [(name: String, pid: Int32)] {
-        let output = shellExec("ps -eo pid,args | grep /opt/homebrew/ | grep -v grep")
-        var seenNames = Set<String>()
-        var services: [(String, Int32)] = []
+    /// Returns all brew services (running or stopped) via `brew services list`.
+    private func brewAllServices() -> [(name: String, isRunning: Bool, pid: Int32?)] {
+        let output = shellExec("brew services list")
+        var services: [(String, Bool, Int32?)] = []
 
-        for line in output.components(separatedBy: .newlines) where !line.isEmpty {
-            let parts = line.split(separator: " ", maxSplits: 1)
-            guard parts.count >= 2,
-                  let pid = Int32(parts[0].trimmingCharacters(in: .whitespaces)) else { continue }
-            let cmd = String(parts[1])
+        for line in output.components(separatedBy: .newlines).dropFirst() {
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count >= 2 else { continue }
 
-            guard let range = cmd.range(of: "/opt/homebrew/") else { continue }
-            let rest = String(cmd[range.upperBound...])
-            let components = rest.split(separator: "/")
-            guard !components.isEmpty else { continue }
+            let name = String(parts[0])
+            let status = String(parts[1])
 
-            var name = String(components[0])
-            if name == "opt", components.count > 1 {
-                name = String(components[1])
-            } else if name == "bin" || name == "sbin", components.count > 1 {
-                name = String(components[1].split(separator: " ").first ?? components[1])
+            guard !name.isEmpty else { continue }
+
+            if status == "started" || status == "started ~" {
+
+                let pid = self.brewServicePID(name)
+                services.append((name, true, pid))
             } else {
-                name = String(name.split(separator: " ").first.map(String.init) ?? name)
+                services.append((name, false, nil))
             }
-
-            guard !name.isEmpty, seenNames.insert(name).inserted else { continue }
-            services.append((name, pid))
         }
         return services
+    }
+
+    /// Gets PID for a specific brew service label.
+    private func brewServicePID(_ name: String) -> Int32? {
+        let label = "homebrew.mxcl.\(name)"
+        let task = Process()
+        task.launchPath = "/bin/launchctl"
+        task.arguments = ["list", label]
+        let out = Pipe()
+        task.standardOutput = out
+        task.standardError = Pipe()
+        guard (try? task.run()) != nil else { return nil }
+        task.waitUntilExit()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+
+        for line in output.components(separatedBy: .newlines).dropFirst() {
+            let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            if parts.count >= 1, let pid = Int32(parts[0]) {
+                return pid
+            }
+        }
+        return nil
     }
 }
