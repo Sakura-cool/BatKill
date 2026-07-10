@@ -133,43 +133,61 @@ final class Updater: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
 
-            let unzipScript = """
-            unzip -o "\(tempURL.path)" -d "\(tmpDir.path)" 2>/dev/null
-            """
-            try runShell(unzipScript)
+            try runShell("unzip -o \"\(tempURL.path)\" -d \"\(tmpDir.path)\" 2>/dev/null")
 
-            let appPath = findApp(in: tmpDir)
-            guard let appPath = appPath else {
+            guard let appPath = findApp(in: tmpDir) else {
                 logger("Updater: no .app found in extracted zip")
-                statusMessage = "Update failed: app not found in zip"
+                DispatchQueue.main.async { self.statusMessage = "Update failed: app not found" }
                 return
             }
 
             let currentAppPath = Bundle.main.bundlePath
-            let trashScript = """
-            osascript -e 'tell application "Finder" to delete POSIX file "\(currentAppPath)"' 2>/dev/null || \
+            let newBinary = "\(currentAppPath)/Contents/MacOS/BatKill"
+
+            let script = """
+            #!/bin/bash
+            # Wait for the running process to fully exit
+            while pgrep -x BatKill > /dev/null 2>&1; do
+                sleep 0.5
+            done
+
+            # Remove old bundle
             rm -rf "\(currentAppPath)"
-            """
 
-            let installScript = """
-            sleep 2
-            mv "\(appPath.path)" "\(currentAppPath)"
+            # Copy new bundle to original location
+            ditto "\(appPath.path)" "\(currentAppPath)"
+
+            # Ensure executable permission
+            chmod +x "\(newBinary)"
+
+            # Remove quarantine to avoid Gatekeeper block
+            xattr -d com.apple.quarantine "\(currentAppPath)" 2>/dev/null || true
+
+            # Relaunch
             open "\(currentAppPath)"
+
+            # Cleanup temp
+            rm -rf "\(tmpDir.path)"
             """
 
-            let fullScript = "\(trashScript)\n\(installScript)"
-            try runShell(fullScript)
+            let scriptPath = tmpDir.appendingPathComponent("update.sh")
+            try script.write(toFile: scriptPath.path, atomically: true, encoding: .utf8)
+            try runShell("chmod +x \"\(scriptPath.path)\"")
 
-            logger("Updater: install complete, relaunching")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            logger("Updater: launching background update script, then terminating")
+
+            let bg = Process()
+            bg.executableURL = URL(fileURLWithPath: "/bin/bash")
+            bg.arguments = ["-c", "nohup \"\(scriptPath.path)\" > /dev/null 2>&1 &"]
+            try bg.run()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 NSApplication.shared.terminate(nil)
             }
 
         } catch {
             logger("Updater: install failed: \(error.localizedDescription)")
-            DispatchQueue.main.async {
-                self.statusMessage = "Install failed: \(error.localizedDescription)"
-            }
+            DispatchQueue.main.async { self.statusMessage = "Install failed: \(error.localizedDescription)" }
         }
     }
 
