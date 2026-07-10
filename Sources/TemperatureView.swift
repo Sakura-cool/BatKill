@@ -31,7 +31,7 @@ struct TemperatureView: View {
         .onAppear {
             hardwareMonitor.refresh()
             initFanStates()
-            refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
                 hardwareMonitor.refresh()
             }
         }
@@ -201,13 +201,13 @@ struct TemperatureView: View {
 
                 Picker("", selection: Binding(
                     get: { isManual },
-                    set: { newValue in
-                        fanManualModes[fan.index] = newValue
-                        hardwareMonitor.setFanMode(fanIndex: fan.index, auto: !newValue)
-                        if newValue {
-                            fanSpeeds[fan.index] = fan.currentSpeed
+                        set: { newValue in
+                            fanManualModes[fan.index] = newValue
+                            hardwareMonitor.setFanMode(fanIndex: fan.index, auto: !newValue)
+                            if newValue {
+                                fanSpeeds[fan.index] = fan.maxSpeed
+                            }
                         }
-                    }
                 )) {
                     Text(lm.translate("Auto", "自动")).tag(false)
                     Text(lm.translate("Manual", "手动")).tag(true)

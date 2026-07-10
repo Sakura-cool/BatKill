@@ -146,6 +146,22 @@ final class HardwareMonitor: ObservableObject {
         return result
     }
 
+    private func readDataType(key: String) -> FourCharCode? {
+        guard let fourChar = keyToFourCharCode(key) else { return nil }
+
+        var input = SMCParamStruct()
+        input.key = fourChar
+        input.data8 = kSMCGetKeyInfo
+
+        var output = SMCParamStruct()
+        var outSize = MemoryLayout<SMCParamStruct>.size
+
+        let kr = IOConnectCallStructMethod(connection, 2, &input, MemoryLayout<SMCParamStruct>.size, &output, &outSize)
+        guard kr == kIOReturnSuccess else { return nil }
+
+        return output.keyInfo.dataType
+    }
+
     private func writeBytes(key: String, bytes: UnsafeRawPointer, length: Int) {
         guard let fourChar = keyToFourCharCode(key) else { return }
 
@@ -177,19 +193,7 @@ final class HardwareMonitor: ObservableObject {
 
     private let temperatureKeys: [(key: String, name: String)] = [
         ("TCPU", "CPU"),
-        ("TG0P", "GPU"),
-        ("TG0D", "GPU Die"),
-        ("TMHD", "Hard Drive"),
-        ("TM0P", "Memory"),
-        ("TA0P", "Ambient"),
-        ("Th0H", "Heatpipe 1"),
-        ("Th1H", "Heatpipe 2"),
-        ("Th2H", "Heatpipe 3"),
-        ("Ts0P", "Palm Rest"),
-        ("Ts1P", "Palm Rest 2"),
-        ("TB0T", "Battery"),
-        ("TW0P", "Airport"),
-        ("TC0C", "CPU Core"),
+        ("TC0C", "CPU Core 0"),
         ("TC1C", "CPU Core 1"),
         ("TC2C", "CPU Core 2"),
         ("TC3C", "CPU Core 3"),
@@ -198,8 +202,34 @@ final class HardwareMonitor: ObservableObject {
         ("TC6C", "CPU Core 6"),
         ("TC7C", "CPU Core 7"),
         ("TC8C", "CPU Core 8"),
+        ("TCXC", "CPU Proximity"),
+        ("TCXD", "CPU Die"),
+        ("TCXE", "CPU Efficiency"),
+        ("TG0P", "GPU"),
+        ("TG0D", "GPU Die"),
+        ("TG0H", "GPU Heatsink"),
+        ("TG0M", "GPU Memory"),
+        ("TGMR", "GPU Memory"),
+        ("TM0P", "Memory"),
+        ("TMHD", "Hard Drive"),
+        ("TA0P", "Ambient"),
+        ("TA1P", "Ambient 2"),
+        ("Th0H", "Heatpipe 1"),
+        ("Th1H", "Heatpipe 2"),
+        ("Th2H", "Heatpipe 3"),
+        ("Ts0P", "Palm Rest"),
+        ("Ts1P", "Palm Rest 2"),
+        ("TB0T", "Battery"),
+        ("TW0P", "Airport"),
         ("TP0P", "Power Supply"),
         ("SP0P", "System"),
+        ("TS0C", "System Controller"),
+        ("SM0P", "SSD"),
+        ("SM1P", "SSD 2"),
+        ("Tp05", "PCIe SSD"),
+        ("Tp0D", "PCIe SSD Die"),
+        ("Tp0E", "PCIe SSD Controller"),
+        ("Tp0P", "PCIe"),
     ]
 
     private func readTemperatures() -> [TemperatureSensor] {
@@ -252,7 +282,29 @@ final class HardwareMonitor: ObservableObject {
 
     private func readFanSpeed(key: String) -> Double {
         guard let bytes = readBytes(key: key), bytes.count >= 2 else { return 0 }
-        return Double(Int(bytes[0]) << 8 | Int(bytes[1]))
+
+        let dataType = readDataType(key: key)
+        let fltType: FourCharCode = fourCharCode("flt ")
+        let fdsType: FourCharCode = fourCharCode("{fds")
+        let fpe2Type: FourCharCode = fourCharCode("fpe2")
+        let sp78Type: FourCharCode = fourCharCode("sp78")
+
+        if dataType == fltType, bytes.count >= 4 {
+            let raw = bytes.withUnsafeBytes { $0.load(fromByteOffset: 0, as: Float32.self) }
+            return Double(raw)
+        } else if dataType == fdsType {
+            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            return Double(raw) / 4.0
+        } else if dataType == fpe2Type {
+            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            return Double(raw) / 4.0
+        } else if dataType == sp78Type {
+            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            return Double(raw) / 256.0
+        } else {
+            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            return Double(raw)
+        }
     }
 
     private func readFanString(key: String) -> String? {
@@ -266,6 +318,12 @@ final class HardwareMonitor: ObservableObject {
     private func keyToFourCharCode(_ key: String) -> FourCharCode? {
         guard key.count == 4 else { return nil }
         let chars = Array(key.utf8)
+        return FourCharCode(chars[0]) << 24 | FourCharCode(chars[1]) << 16 |
+               FourCharCode(chars[2]) << 8 | FourCharCode(chars[3])
+    }
+
+    private func fourCharCode(_ str: String) -> FourCharCode {
+        let chars = Array(str.utf8)
         return FourCharCode(chars[0]) << 24 | FourCharCode(chars[1]) << 16 |
                FourCharCode(chars[2]) << 8 | FourCharCode(chars[3])
     }
