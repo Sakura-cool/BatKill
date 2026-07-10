@@ -75,7 +75,16 @@ struct ContentView: View {
                 .symbolEffect(.pulse, value: batteryMonitor.isOnBattery)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("BatKill").font(.title2).fontWeight(.semibold)
+                HStack(spacing: 6) {
+                    Text("BatKill").font(.title2).fontWeight(.semibold)
+                    Text("\(versionChecker.currentVersion) · \(archLabel)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.12))
+                        .cornerRadius(4)
+                }
                 Text(powerStatusText)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -96,6 +105,14 @@ struct ContentView: View {
         } else {
             batterySourceLabel
         }
+    }
+
+    private var archLabel: String {
+        #if arch(arm64)
+        return "Apple Silicon"
+        #else
+        return "Intel"
+        #endif
     }
 
     private var batterySourceLabel: String {
