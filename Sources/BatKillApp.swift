@@ -14,6 +14,8 @@ struct BatKillApp: App {
                 .environmentObject(appDelegate.appLister)
                 .environmentObject(appDelegate.processKiller)
                 .environmentObject(appDelegate.localizationManager)
+                .environmentObject(appDelegate.versionChecker)
+                .environmentObject(appDelegate.updater)
         }
         .windowResizability(.contentSize)
         .commands { CommandGroup(replacing: .newItem) { } }
@@ -26,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appLister           = AppLister()
     let processKiller       = ProcessKiller()
     let localizationManager = LocalizationManager.shared
+    let versionChecker      = VersionChecker()
+    lazy var updater        = Updater(checker: versionChecker)
 
     private var menuBarManager: MenuBarManager?
     private var hasAppeared      = false
@@ -80,7 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 2. Start
         appLister.refreshAppList()
 
-        // 3. Listen for settings window requests
+        // 3. Check for updates
+        versionChecker.checkForUpdate()
+
+        // 4. Listen for settings window requests
         NotificationCenter.default.addObserver(
             self, selector: #selector(showSettingsWindow),
             name: .showSettings, object: nil)

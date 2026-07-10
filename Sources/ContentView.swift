@@ -7,6 +7,8 @@ struct ContentView: View {
     @EnvironmentObject var appLister: AppLister
     @EnvironmentObject var processKiller: ProcessKiller
     @EnvironmentObject var lm: LocalizationManager
+    @EnvironmentObject var versionChecker: VersionChecker
+    @EnvironmentObject var updater: Updater
 
     @AppStorage("autoKillEnabled") private var autoKillEnabled = false
     @AppStorage("launchAtLogin")   private var launchAtLogin   = false
@@ -280,6 +282,27 @@ struct ContentView: View {
                     "Launch BatKill automatically when you log in",
                     "登录时自动启动 BatKill"
                 ))
+
+                if versionChecker.hasUpdate, let ver = versionChecker.latestVersion {
+                    if updater.isDownloading {
+                        ProgressView(value: updater.downloadProgress)
+                            .frame(width: 60)
+                    } else {
+                        Button {
+                            updater.downloadAndInstall()
+                        } label: {
+                            Label(
+                                lm.translate("Update to v\(ver)", "更新到 v\(ver)"),
+                                systemImage: "arrow.down.circle"
+                            )
+                            .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.blue)
+                    }
+                } else if versionChecker.isLoading {
+                    ProgressView().scaleEffect(0.5).frame(width: 12)
+                }
             }
         }
     }
