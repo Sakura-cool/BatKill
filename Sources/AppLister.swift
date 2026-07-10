@@ -275,10 +275,12 @@ final class AppLister: ObservableObject {
             guard !components.isEmpty else { continue }
 
             var name = String(components[0])
-            if name == "bin" || name == "sbin", components.count > 1 {
+            if name == "opt", components.count > 1 {
                 name = String(components[1])
-            } else if name == "opt", components.count > 2 {
-                name = String(components[2])
+            } else if name == "bin" || name == "sbin", components.count > 1 {
+                name = String(components[1].split(separator: " ").first ?? components[1])
+            } else {
+                name = String(name.split(separator: " ").first.map(String.init) ?? name)
             }
 
             guard !name.isEmpty, seenNames.insert(name).inserted else { continue }
