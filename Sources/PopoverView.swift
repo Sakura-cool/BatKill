@@ -61,7 +61,7 @@ struct PopoverView: View {
                     || !appLister.apps.contains(where: { $0.isSelected && $0.isRunning }))
 
                 Button {
-                    (NSApp.delegate as? AppDelegate)?.showSettingsWindow()
+                    NotificationCenter.default.post(name: .showSettings, object: nil)
                 } label: {
                     Label(lm.translate("Settings", "设置"), systemImage: "gearshape")
                         .font(.caption)

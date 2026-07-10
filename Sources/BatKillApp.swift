@@ -14,17 +14,6 @@ struct BatKillApp: App {
                 .environmentObject(appDelegate.appLister)
                 .environmentObject(appDelegate.processKiller)
                 .environmentObject(appDelegate.localizationManager)
-                .onAppear {
-                    DispatchQueue.main.async {
-                        NSApp.windows.first?.identifier = NSUserInterfaceItemIdentifier("BatKillWindow")
-                    }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .showSettings)) { _ in
-                    if let win = NSApp.windows.first(where: { $0.identifier?.rawValue == "BatKillWindow" }) {
-                        win.makeKeyAndOrderFront(nil)
-                    }
-                    NSApp.activate(ignoringOtherApps: true)
-                }
         }
         .windowResizability(.contentSize)
         .commands { CommandGroup(replacing: .newItem) { } }
@@ -40,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var menuBarManager: MenuBarManager?
     private var hasAppeared      = false
-    private var windowAllowed    = false   // true = user clicked "Show Window"
+    private var settingsWindow: NSWindow?
     private var cancellables     = Set<AnyCancellable>()
 
     // ── Power‑action queue ──
@@ -91,32 +80,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 2. Start
         appLister.refreshAppList()
 
-        // 3. Suppress the automatic window that SwiftUI WindowGroup creates
+        // 3. Listen for settings window requests
         NotificationCenter.default.addObserver(
-            self, selector: #selector(windowDidBecomeVisible),
-            name: Notification.Name("NSWindowDidBecomeVisibleNotification"), object: nil)
+            self, selector: #selector(showSettingsWindow),
+            name: .showSettings, object: nil)
 
         // 4. Badge & state
         observeStateChanges()
     }
 
-    // ──────────────────────────────────────────────
-    // MARK: - Window suppression
-    // ──────────────────────────────────────────────
-    @objc private func windowDidBecomeVisible(_ n: Notification) {
-        guard let win = n.object as? NSWindow,
-              win.identifier?.rawValue == "BatKillWindow",
-              !windowAllowed else { return }
-        win.close()
+    @objc func showSettingsWindow() {
+        logger("showSettingsWindow: called, settingsWindow=\(settingsWindow != nil), isVisible=\(settingsWindow?.isVisible ?? false)")
+
+        if let win = settingsWindow, win.isVisible {
+            win.makeKeyAndOrderFront(nil)
+            activateApp()
+            return
+        }
+
+        settingsWindow?.close()
+        settingsWindow = nil
+
+        let contentView = ContentView()
+            .environmentObject(batteryMonitor)
+            .environmentObject(appLister)
+            .environmentObject(processKiller)
+            .environmentObject(localizationManager)
+
+        let hostingController = NSHostingController(rootView: contentView)
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "BatKill"
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 500, height: 640))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        settingsWindow = window
+        activateApp()
     }
 
-    /// Called from the menu‑bar context menu / popover.
-    @objc func showSettingsWindow() {
-        windowAllowed = true
-        NotificationCenter.default.post(name: .showSettings, object: nil)
-        NSApp.activate(ignoringOtherApps: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.windowAllowed = false
+    private func activateApp() {
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 

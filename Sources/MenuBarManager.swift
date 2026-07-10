@@ -141,11 +141,11 @@ final class MenuBarManager: NSObject, ObservableObject {
     // ──────────────────────────────────────────────
     @objc func showSettingsWindow() {
         if popover.isShown { popover.performClose(nil) }
-        (NSApp.delegate as? AppDelegate)?.showSettingsWindow()
+        NotificationCenter.default.post(name: .showSettings, object: nil)
     }
 }
 
-// MARK: - Notification
 extension Notification.Name {
     static let showSettings = Notification.Name("showSettings")
 }
+
