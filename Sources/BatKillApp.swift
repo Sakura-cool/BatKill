@@ -16,6 +16,7 @@ struct BatKillApp: App {
                 .environmentObject(appDelegate.localizationManager)
                 .environmentObject(appDelegate.versionChecker)
                 .environmentObject(appDelegate.updater)
+                .environmentObject(appDelegate.hardwareMonitor)
         }
         .windowResizability(.contentSize)
         .commands { CommandGroup(replacing: .newItem) { } }
@@ -30,10 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let localizationManager = LocalizationManager.shared
     let versionChecker      = VersionChecker()
     lazy var updater        = Updater(checker: versionChecker)
+    let hardwareMonitor     = HardwareMonitor()
 
     private var menuBarManager: MenuBarManager?
     private var hasAppeared      = false
     private var settingsWindow: NSWindow?
+    private var temperatureWindow: NSWindow?
     private var cancellables     = Set<AnyCancellable>()
 
     // ── Power‑action queue ──
@@ -87,10 +90,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 3. Check for updates
         versionChecker.checkForUpdate()
 
-        // 4. Listen for settings window requests
+        // 4. Listen for window requests
         NotificationCenter.default.addObserver(
             self, selector: #selector(showSettingsWindow),
             name: .showSettings, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(showTemperatureWindow),
+            name: .showTemperature, object: nil)
 
         // 4. Badge & state
         observeStateChanges()
@@ -123,6 +129,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         settingsWindow = window
+        activateApp()
+    }
+
+    @objc func showTemperatureWindow() {
+        if let win = temperatureWindow, win.isVisible {
+            win.makeKeyAndOrderFront(nil)
+            activateApp()
+            return
+        }
+
+        temperatureWindow?.close()
+        temperatureWindow = nil
+
+        let contentView = TemperatureView(hardwareMonitor: hardwareMonitor, lm: localizationManager)
+            .environmentObject(hardwareMonitor)
+            .environmentObject(localizationManager)
+
+        let hostingController = NSHostingController(rootView: contentView)
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "Temperature"
+        window.styleMask = [NSWindow.StyleMask.titled, NSWindow.StyleMask.closable]
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 420, height: 340))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        temperatureWindow = window
         activateApp()
     }
 

@@ -147,5 +147,6 @@ final class MenuBarManager: NSObject, ObservableObject {
 
 extension Notification.Name {
     static let showSettings = Notification.Name("showSettings")
+    static let showTemperature = Notification.Name("showTemperature")
 }
 

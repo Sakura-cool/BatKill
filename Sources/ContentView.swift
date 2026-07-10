@@ -9,6 +9,7 @@ struct ContentView: View {
     @EnvironmentObject var lm: LocalizationManager
     @EnvironmentObject var versionChecker: VersionChecker
     @EnvironmentObject var updater: Updater
+    @EnvironmentObject var hardwareMonitor: HardwareMonitor
 
     @AppStorage("autoKillEnabled") private var autoKillEnabled = false
     @AppStorage("launchAtLogin")   private var launchAtLogin   = false
@@ -73,6 +74,19 @@ struct ContentView: View {
                 .font(.system(size: 28))
                 .foregroundColor(batteryMonitor.isOnBattery ? .orange : .green)
                 .symbolEffect(.pulse, value: batteryMonitor.isOnBattery)
+
+            Button {
+                NotificationCenter.default.post(name: .showTemperature, object: nil)
+            } label: {
+                Image(systemName: "thermometer.medium")
+                    .font(.system(size: 16))
+                    .foregroundColor(.red)
+                    .frame(width: 28, height: 28)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+            .help(lm.translate("Temperature & Fan Control", "温度与风扇控制"))
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
