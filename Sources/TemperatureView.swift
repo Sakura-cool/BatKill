@@ -5,7 +5,10 @@ struct TemperatureView: View {
     @ObservedObject var hardwareMonitor: HardwareMonitor
     @ObservedObject var lm: LocalizationManager
     @State private var fanManualModes: [Int: Bool] = [:]
-    @State private var fanSpeeds: [Int: Double] = [:]
+    @State private var fanPendingSpeeds: [Int: Double] = [:]
+    @State private var expandedCategories: Set<TemperatureCategory> = [.cpu]
+    @State private var fanWriteStatus: [Int: String] = [:]
+    @State private var fanNeedsAdmin: [Int: Bool] = [:]
     @State private var refreshTimer: Timer?
 
     var body: some View {
@@ -19,15 +22,15 @@ struct TemperatureView: View {
                 unavailableView
             } else {
                 ScrollView {
-                    VStack(spacing: 16) {
-                        temperatureSection
+                    VStack(spacing: 12) {
+                        temperatureGroups
                         fanSection
                     }
                     .padding()
                 }
             }
         }
-        .frame(width: 420, height: 520)
+        .frame(width: 480, height: 600)
         .onAppear {
             hardwareMonitor.refresh()
             initFanStates()
@@ -98,57 +101,121 @@ struct TemperatureView: View {
         }
     }
 
-    // MARK: - Temperature Section
+    // MARK: - Temperature Groups
 
-    private var temperatureSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "thermometer.medium")
-                    .foregroundColor(.red)
-                    .font(.caption)
-                Text(lm.translate("Temperatures", "温度"))
-                    .font(.subheadline).fontWeight(.medium)
-                Spacer()
-            }
-
-            if hardwareMonitor.temperatures.isEmpty {
-                Text(lm.translate("No temperature sensors found", "未发现温度传感器"))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.vertical, 8)
+    private var temperatureGroups: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            let groups = hardwareMonitor.groupedTemperatures
+            if groups.isEmpty {
+                emptyTempView
             } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(hardwareMonitor.temperatures) { sensor in
-                        HStack {
-                            Text(sensor.name)
-                                .font(.caption)
-                                .frame(width: 100, alignment: .leading)
-
-                            ProgressView(value: normalizedTemp(sensor.temperature), total: 1.0)
-                                .tint(tempColor(sensor.temperature))
-                                .frame(maxWidth: .infinity)
-
-                            Text(String(format: "%.1f°", sensor.temperature))
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundColor(tempColor(sensor.temperature))
-                                .frame(width: 50, alignment: .trailing)
-
-                            Circle()
-                                .fill(tempColor(sensor.temperature))
-                                .frame(width: 6, height: 6)
-                        }
-                        .padding(.vertical, 4)
-
-                        if sensor.id != hardwareMonitor.temperatures.last?.id {
-                            Divider().padding(.leading, 100)
-                        }
+                ForEach(groups) { group in
+                    temperatureGroupRow(group)
+                    if group.id != groups.last?.id {
+                        Divider().padding(.horizontal, 12)
                     }
                 }
             }
         }
-        .padding(12)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
+    }
+
+    private var emptyTempView: some View {
+        HStack {
+            Spacer()
+            Text(lm.translate("No temperature sensors found", "未发现温度传感器"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.vertical, 16)
+            Spacer()
+        }
+    }
+
+    private func temperatureGroupRow(_ group: TemperatureGroup) -> some View {
+        let isExpanded = expandedCategories.contains(group.category)
+
+        return VStack(spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if isExpanded {
+                        expandedCategories.remove(group.category)
+                    } else {
+                        expandedCategories.insert(group.category)
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: group.category.systemImage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(width: 16)
+
+                    Text(lm.translate(group.category.localizedName.en, group.category.localizedName.zh))
+                        .font(.subheadline).fontWeight(.medium)
+
+                    if group.sensors.count > 1 {
+                        Text(String(format: "(%d)", group.sensors.count))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Text(String(format: "%.1f°", group.average))
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(tempColor(group.average))
+
+                    Circle()
+                        .fill(tempColor(group.average))
+                        .frame(width: 6, height: 6)
+
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(spacing: 0) {
+                    ForEach(group.sensors) { sensor in
+                        sensorRow(sensor, isLast: sensor.id == group.sensors.last?.id)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sensorRow(_ sensor: TemperatureSensor, isLast: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text("  \(sensor.name)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 130, alignment: .leading)
+
+            ProgressView(value: normalizedTemp(sensor.temperature), total: 1.0)
+                .tint(tempColor(sensor.temperature))
+                .frame(maxWidth: .infinity)
+
+            Text(String(format: "%.1f°", sensor.temperature))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(tempColor(sensor.temperature))
+                .frame(width: 45, alignment: .trailing)
+
+            Circle()
+                .fill(tempColor(sensor.temperature))
+                .frame(width: 5, height: 5)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 3)
+
+        if !isLast {
+            Divider().padding(.leading, 142)
+        }
     }
 
     // MARK: - Fan Section
@@ -185,7 +252,7 @@ struct TemperatureView: View {
 
     private func fanControlRow(_ fan: FanInfo) -> some View {
         let isManual = fanManualModes[fan.index] ?? false
-        let speed = fanSpeeds[fan.index] ?? fan.currentSpeed
+        let pendingSpeed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -201,13 +268,15 @@ struct TemperatureView: View {
 
                 Picker("", selection: Binding(
                     get: { isManual },
-                        set: { newValue in
-                            fanManualModes[fan.index] = newValue
-                            hardwareMonitor.setFanMode(fanIndex: fan.index, auto: !newValue)
-                            if newValue {
-                                fanSpeeds[fan.index] = fan.maxSpeed
-                            }
+                    set: { newValue in
+                        fanManualModes[fan.index] = newValue
+                        hardwareMonitor.setFanMode(fanIndex: fan.index, auto: !newValue)
+                        if newValue {
+                            fanPendingSpeeds[fan.index] = fan.maxSpeed
                         }
+                        fanWriteStatus[fan.index] = nil
+                        fanNeedsAdmin[fan.index] = nil
+                    }
                 )) {
                     Text(lm.translate("Auto", "自动")).tag(false)
                     Text(lm.translate("Manual", "手动")).tag(true)
@@ -224,23 +293,20 @@ struct TemperatureView: View {
 
                     Slider(
                         value: Binding(
-                            get: { speed },
-                            set: { newValue in
-                                fanSpeeds[fan.index] = newValue
-                                hardwareMonitor.setFanSpeed(fanIndex: fan.index, speed: newValue)
-                            }
+                            get: { pendingSpeed },
+                            set: { fanPendingSpeeds[fan.index] = $0 }
                         ),
-                        in: 0...fan.maxSpeed,
-                        step: 50
+                        in: fan.minSpeed...fan.maxSpeed,
+                        step: max(1, fan.maxSpeed / 200)
                     )
 
                     Image(systemName: "plus")
                         .font(.caption2)
                         .foregroundColor(.secondary)
 
-                    Text(String(format: "%d", Int(speed)))
+                    Text(String(format: "%d", Int(pendingSpeed)))
                         .font(.system(.caption, design: .monospaced))
-                        .frame(width: 45, alignment: .trailing)
+                        .frame(width: 50, alignment: .trailing)
                 }
 
                 HStack {
@@ -252,6 +318,50 @@ struct TemperatureView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
+
+                HStack(spacing: 8) {
+                    Button {
+                        let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
+                        let ok = hardwareMonitor.setFanSpeed(fanIndex: fan.index, speed: speed)
+                        if ok {
+                            fanWriteStatus[fan.index] = lm.translate("Set", "已设定")
+                            fanNeedsAdmin[fan.index] = nil
+                        } else {
+                            fanNeedsAdmin[fan.index] = true
+                            fanWriteStatus[fan.index] = lm.translate("Failed", "失败")
+                        }
+                    } label: {
+                        Label(lm.translate("Set Speed", "设定转速"), systemImage: "checkmark.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.blue)
+
+                    if fanNeedsAdmin[fan.index] == true {
+                        Button {
+                            let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
+                            let ok = hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed)
+                            fanWriteStatus[fan.index] = ok
+                                ? lm.translate("Set (Admin)", "已设定(管理员)")
+                                : lm.translate("Admin Failed", "管理员授权失败")
+                            fanNeedsAdmin[fan.index] = !ok
+                        } label: {
+                            Label(lm.translate("Retry as Admin", "以管理员重试"), systemImage: "lock.shield")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(.orange)
+                    }
+
+                    if let status = fanWriteStatus[fan.index] {
+                        Text(status)
+                            .font(.caption2)
+                            .foregroundColor(fanNeedsAdmin[fan.index] == true ? .red : .green)
+                    }
+
+                    Spacer()
+                }
+                .padding(.top, 2)
             }
         }
         .padding(.vertical, 6)
@@ -264,8 +374,8 @@ struct TemperatureView: View {
             if fanManualModes[fan.index] == nil {
                 fanManualModes[fan.index] = !fan.isAutoMode
             }
-            if fanSpeeds[fan.index] == nil {
-                fanSpeeds[fan.index] = fan.currentSpeed
+            if fanPendingSpeeds[fan.index] == nil {
+                fanPendingSpeeds[fan.index] = fan.maxSpeed
             }
         }
     }

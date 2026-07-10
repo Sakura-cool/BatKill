@@ -35,6 +35,55 @@ struct TemperatureSensor: Identifiable {
     let key: String
     let name: String
     let temperature: Double
+    let category: TemperatureCategory
+}
+
+enum TemperatureCategory: String, CaseIterable, Identifiable {
+    case cpu = "CPU"
+    case gpu = "GPU"
+    case memory = "Memory"
+    case battery = "Battery"
+    case storage = "Storage"
+    case ambient = "Ambient"
+    case other = "Other"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .cpu:     return "cpu"
+        case .gpu:     return "display"
+        case .memory:  return "memorychip"
+        case .battery: return "battery.100"
+        case .storage: return "internaldrive"
+        case .ambient: return "thermometer.medium"
+        case .other:   return "gearshape"
+        }
+    }
+
+    var localizedName: (en: String, zh: String) {
+        switch self {
+        case .cpu:     return ("CPU", "处理器")
+        case .gpu:     return ("GPU", "显卡")
+        case .memory:  return ("Memory", "内存")
+        case .battery: return ("Battery", "电池")
+        case .storage: return ("Storage", "存储")
+        case .ambient: return ("Ambient", "环境")
+        case .other:   return ("Other", "其他")
+        }
+    }
+}
+
+struct TemperatureGroup: Identifiable {
+    let category: TemperatureCategory
+    let sensors: [TemperatureSensor]
+
+    var id: TemperatureCategory { category }
+
+    var average: Double {
+        guard !sensors.isEmpty else { return 0 }
+        return sensors.map(\.temperature).reduce(0, +) / Double(sensors.count)
+    }
 }
 
 struct FanInfo: Identifiable {
@@ -52,6 +101,7 @@ final class HardwareMonitor: ObservableObject {
     @Published var temperatures: [TemperatureSensor] = []
     @Published var fans: [FanInfo] = []
     @Published var isAvailable = false
+    @Published var lastFanWriteOK = false
 
     private var connection: io_connect_t = 0
 
@@ -69,6 +119,18 @@ final class HardwareMonitor: ObservableObject {
         close()
     }
 
+    var groupedTemperatures: [TemperatureGroup] {
+        var map: [TemperatureCategory: [TemperatureSensor]] = [:]
+        for cat in TemperatureCategory.allCases { map[cat] = [] }
+        for sensor in temperatures {
+            map[sensor.category]?.append(sensor)
+        }
+        return TemperatureCategory.allCases.compactMap { cat in
+            let sensors = map[cat] ?? []
+            return sensors.isEmpty ? nil : TemperatureGroup(category: cat, sensors: sensors)
+        }
+    }
+
     func refresh() {
         temperatures = readTemperatures()
         fans = readFans()
@@ -78,45 +140,46 @@ final class HardwareMonitor: ObservableObject {
 
     func setFanMode(fanIndex: Int, auto: Bool) {
         let key = String(format: "F%dMd", fanIndex)
-        let dataType = readDataType(key: key)
-        let fltType = fourCharCode("flt ")
-        let fdsType = fourCharCode("{fds")
-        let fpe2Type = fourCharCode("fpe2")
-
-        if dataType == fltType {
-            var value: Float32 = auto ? 0.0 : 1.0
-            _ = writeBytes(key: key, bytes: &value, length: 4)
-        } else if dataType == fdsType || dataType == fpe2Type {
-            var value: UInt16 = auto ? 0 : UInt16(1 << 14)
-            _ = writeBytes(key: key, bytes: &value, length: 2)
-        } else {
-            var value: UInt8 = auto ? 0 : 1
-            _ = writeBytes(key: key, bytes: &value, length: 1)
-        }
+        var value: UInt8 = auto ? 0 : 1
+        let ok = writeBytes(key: key, bytes: &value, length: 1)
+        lastFanWriteOK = ok
         refresh()
     }
 
-    func setFanSpeed(fanIndex: Int, speed: Double) {
-        let key = String(format: "F%dTg", fanIndex)
-        let dataType = readDataType(key: key)
-        let fltType = fourCharCode("flt ")
-        let fdsType = fourCharCode("{fds")
-        let fpe2Type = fourCharCode("fpe2")
-
-        if dataType == fltType {
-            var value = Float32(speed)
-            _ = writeBytes(key: key, bytes: &value, length: 4)
-        } else if dataType == fdsType {
-            var value = UInt16(speed * 4.0)
-            _ = writeBytes(key: key, bytes: &value, length: 2)
-        } else if dataType == fpe2Type {
-            var value = UInt16(speed * 64.0)
-            _ = writeBytes(key: key, bytes: &value, length: 2)
-        } else {
-            var value = UInt16(Int(speed))
-            _ = writeBytes(key: key, bytes: &value, length: 2)
-        }
+    func setFanSpeed(fanIndex: Int, speed: Double) -> Bool {
+        let ok = writeFanTarget(fanIndex: fanIndex, speed: speed)
+        lastFanWriteOK = ok
         refresh()
+        return ok
+    }
+
+    private func writeFanTarget(fanIndex: Int, speed: Double) -> Bool {
+        let key = String(format: "F%dTg", fanIndex)
+        var value = UInt16(clamping: Int(speed))
+        return writeBytes(key: key, bytes: &value, length: 2)
+    }
+
+    // MARK: - Admin Fan Control
+
+    func setFanSpeedWithAdmin(fanIndex: Int, speed: Double) -> Bool {
+        let execPath = CommandLine.arguments[0]
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        task.arguments = [execPath, "--set-fan", "\(fanIndex)", "\(Int(speed))"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let ok = task.terminationStatus == 0
+            if ok { refresh() }
+            lastFanWriteOK = ok
+            return ok
+        } catch {
+            logger("setFanSpeedWithAdmin failed: \(error)")
+            lastFanWriteOK = false
+            return false
+        }
     }
 
     // MARK: - SMC Connection
@@ -175,7 +238,7 @@ final class HardwareMonitor: ObservableObject {
         return result
     }
 
-    private func readDataType(key: String) -> FourCharCode? {
+    private func readKeyInfo(key: String) -> (dataType: FourCharCode, dataSize: UInt32)? {
         guard let fourChar = keyToFourCharCode(key) else { return nil }
 
         var input = SMCParamStruct()
@@ -188,7 +251,11 @@ final class HardwareMonitor: ObservableObject {
         let kr = IOConnectCallStructMethod(connection, 2, &input, MemoryLayout<SMCParamStruct>.size, &output, &outSize)
         guard kr == kIOReturnSuccess else { return nil }
 
-        return output.keyInfo.dataType
+        return (output.keyInfo.dataType, output.keyInfo.dataSize)
+    }
+
+    private func readDataType(key: String) -> FourCharCode? {
+        return readKeyInfo(key: key)?.dataType
     }
 
     private func writeBytes(key: String, bytes: UnsafeRawPointer, length: Int) -> Bool {
@@ -221,52 +288,57 @@ final class HardwareMonitor: ObservableObject {
 
     // MARK: - Temperature Reading
 
-    private let temperatureKeys: [(key: String, name: String)] = [
-        ("TCPU", "CPU"),
-        ("TC0C", "CPU Core 0"),
-        ("TC1C", "CPU Core 1"),
-        ("TC2C", "CPU Core 2"),
-        ("TC3C", "CPU Core 3"),
-        ("TC4C", "CPU Core 4"),
-        ("TC5C", "CPU Core 5"),
-        ("TC6C", "CPU Core 6"),
-        ("TC7C", "CPU Core 7"),
-        ("TC8C", "CPU Core 8"),
-        ("TCXC", "CPU Proximity"),
-        ("TCXD", "CPU Die"),
-        ("TCXE", "CPU Efficiency"),
-        ("TG0P", "GPU"),
-        ("TG0D", "GPU Die"),
-        ("TG0H", "GPU Heatsink"),
-        ("TG0M", "GPU Memory"),
-        ("TGMR", "GPU Memory"),
-        ("TM0P", "Memory"),
-        ("TMHD", "Hard Drive"),
-        ("TA0P", "Ambient"),
-        ("TA1P", "Ambient 2"),
-        ("Th0H", "Heatpipe 1"),
-        ("Th1H", "Heatpipe 2"),
-        ("Th2H", "Heatpipe 3"),
-        ("Ts0P", "Palm Rest"),
-        ("Ts1P", "Palm Rest 2"),
-        ("TB0T", "Battery"),
-        ("TW0P", "Airport"),
-        ("TP0P", "Power Supply"),
-        ("SP0P", "System"),
-        ("TS0C", "System Controller"),
-        ("SM0P", "SSD"),
-        ("SM1P", "SSD 2"),
-        ("Tp05", "PCIe SSD"),
-        ("Tp0D", "PCIe SSD Die"),
-        ("Tp0E", "PCIe SSD Controller"),
-        ("Tp0P", "PCIe"),
+    private let temperatureKeys: [(key: String, name: String, category: TemperatureCategory)] = [
+        ("TCPU", "CPU Package",        .cpu),
+        ("TC0C", "CPU Core 0",         .cpu),
+        ("TC1C", "CPU Core 1",         .cpu),
+        ("TC2C", "CPU Core 2",         .cpu),
+        ("TC3C", "CPU Core 3",         .cpu),
+        ("TC4C", "CPU Core 4",         .cpu),
+        ("TC5C", "CPU Core 5",         .cpu),
+        ("TC6C", "CPU Core 6",         .cpu),
+        ("TC7C", "CPU Core 7",         .cpu),
+        ("TC8C", "CPU Core 8",         .cpu),
+        ("TCXC", "CPU Proximity",      .cpu),
+        ("TCXD", "CPU Die",            .cpu),
+        ("TCXE", "CPU Efficiency",     .cpu),
+        ("TCXF", "CPU Performance",    .cpu),
+        ("TG0P", "GPU Package",        .gpu),
+        ("TG0D", "GPU Die",            .gpu),
+        ("TG0H", "GPU Heatsink",       .gpu),
+        ("TG0M", "GPU Memory",         .gpu),
+        ("TGMR", "GPU Memory",         .gpu),
+        ("TM0P", "Memory Proximity",   .memory),
+        ("TM0S", "Memory Slot",        .memory),
+        ("TM8S", "Memory Slot 2",      .memory),
+        ("TB0T", "Battery",            .battery),
+        ("TB1T", "Battery 1",          .battery),
+        ("TB2T", "Battery 2",          .battery),
+        ("SM0P", "SSD",                .storage),
+        ("SM1P", "SSD 2",              .storage),
+        ("Tp05", "NVMe",               .storage),
+        ("Tp0D", "NVMe Die",           .storage),
+        ("Tp0E", "NVMe Controller",    .storage),
+        ("TA0P", "Ambient",            .ambient),
+        ("TA1P", "Ambient 2",          .ambient),
+        ("TH00", "Heatpipe 1",         .ambient),
+        ("TH01", "Heatpipe 2",         .ambient),
+        ("TH02", "Heatpipe 3",         .ambient),
+        ("Ts0P", "Palm Rest",          .other),
+        ("Ts1P", "Palm Rest 2",        .other),
+        ("TW0P", "WiFi",               .other),
+        ("TP0P", "Power Supply",       .other),
+        ("SP0P", "System",             .other),
+        ("TS0C", "System Controller",  .other),
     ]
 
     private func readTemperatures() -> [TemperatureSensor] {
         var results: [TemperatureSensor] = []
         for item in temperatureKeys {
             if let value = readTemperature(key: item.key) {
-                results.append(TemperatureSensor(key: item.key, name: item.name, temperature: value))
+                results.append(TemperatureSensor(
+                    key: item.key, name: item.name,
+                    temperature: value, category: item.category))
             }
         }
         return results
@@ -276,12 +348,10 @@ final class HardwareMonitor: ObservableObject {
         guard let bytes = readBytes(key: key), bytes.count >= 2 else { return nil }
 
         let dataType = readDataType(key: key)
-        let fltType = fourCharCode("flt ")
-        let fdsType = fourCharCode("{fds")
+        let fltType  = fourCharCode("flt ")
+        let fdsType  = fourCharCode("{fds")
         let fpe2Type = fourCharCode("fpe2")
         let sp78Type = fourCharCode("sp78")
-        let ui16Type = fourCharCode("ui16")
-        let ui8Type  = fourCharCode("ui8 ")
 
         var temp: Double = 0
 
@@ -296,11 +366,6 @@ final class HardwareMonitor: ObservableObject {
         } else if dataType == fpe2Type {
             let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
             temp = Double(raw) / 64.0
-        } else if dataType == ui16Type {
-            let raw = Int(bytes[0]) << 8 | Int(bytes[1])
-            temp = Double(raw)
-        } else if dataType == ui8Type {
-            temp = Double(bytes[0])
         } else {
             let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
             temp = Double(raw) / 256.0
@@ -342,10 +407,9 @@ final class HardwareMonitor: ObservableObject {
         guard let bytes = readBytes(key: key), bytes.count >= 2 else { return 0 }
 
         let dataType = readDataType(key: key)
-        let fltType: FourCharCode = fourCharCode("flt ")
-        let fdsType: FourCharCode = fourCharCode("{fds")
-        let fpe2Type: FourCharCode = fourCharCode("fpe2")
-        let sp78Type: FourCharCode = fourCharCode("sp78")
+        let fltType  = fourCharCode("flt ")
+        let fdsType  = fourCharCode("{fds")
+        let fpe2Type = fourCharCode("fpe2")
 
         if dataType == fltType, bytes.count >= 4 {
             let raw = bytes.withUnsafeBytes { $0.load(fromByteOffset: 0, as: Float32.self) }
@@ -356,11 +420,8 @@ final class HardwareMonitor: ObservableObject {
         } else if dataType == fpe2Type {
             let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
             return Double(raw) / 4.0
-        } else if dataType == sp78Type {
-            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
-            return Double(raw) / 256.0
         } else {
-            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            let raw = Int(bytes[0]) << 8 | Int(bytes[1])
             return Double(raw)
         }
     }

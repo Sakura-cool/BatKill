@@ -23,6 +23,17 @@ struct BatKillApp: App {
     }
 }
 
+// MARK: - CLI Fan Write (admin re-launch)
+private func handleCLIArgs() -> Bool {
+    let args = CommandLine.arguments
+    guard args.count == 4, args[1] == "--set-fan" else { return false }
+    guard let fanIndex = Int(args[2]), let speed = Double(args[3]) else { return false }
+
+    let monitor = HardwareMonitor()
+    _ = monitor.setFanSpeed(fanIndex: fanIndex, speed: speed)
+    exit(monitor.lastFanWriteOK ? 0 : 1)
+}
+
 // MARK: - App Delegate
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let batteryMonitor      = BatteryMonitor()
@@ -73,7 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Launch
     // ──────────────────────────────────────────────
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 0. Single-instance enforcement
+        if handleCLIArgs() { return }
+
         if enforceSingleInstance() { return }
 
         // 1. Menu bar
