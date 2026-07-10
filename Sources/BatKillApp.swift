@@ -26,12 +26,24 @@ struct BatKillApp: App {
 // MARK: - CLI Fan Write (admin re-launch)
 private func handleCLIArgs() -> Bool {
     let args = CommandLine.arguments
-    guard args.count == 4, args[1] == "--set-fan" else { return false }
-    guard let fanIndex = Int(args[2]), let speed = Double(args[3]) else { return false }
+    guard args.count >= 2 else { return false }
 
-    let monitor = HardwareMonitor()
-    _ = monitor.setFanSpeed(fanIndex: fanIndex, speed: speed)
-    exit(monitor.lastFanWriteOK ? 0 : 1)
+    if args[1] == "--set-fan", args.count == 4 {
+        guard let fanIndex = Int(args[2]), let speed = Double(args[3]) else { return false }
+        let monitor = HardwareMonitor()
+        monitor.setFanMode(fanIndex: fanIndex, auto: false)
+        _ = monitor.setFanSpeed(fanIndex: fanIndex, speed: speed)
+        exit(monitor.lastFanWriteOK ? 0 : 1)
+    }
+
+    if args[1] == "--set-fan-mode", args.count == 4 {
+        guard let fanIndex = Int(args[2]), let mode = Int(args[3]) else { return false }
+        let monitor = HardwareMonitor()
+        _ = monitor.setFanMode(fanIndex: fanIndex, auto: mode == 0)
+        exit(monitor.lastFanWriteOK ? 0 : 1)
+    }
+
+    return false
 }
 
 // MARK: - App Delegate
@@ -131,6 +143,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(appLister)
             .environmentObject(processKiller)
             .environmentObject(localizationManager)
+            .environmentObject(versionChecker)
+            .environmentObject(updater)
+            .environmentObject(hardwareMonitor)
 
         let hostingController = NSHostingController(rootView: contentView)
         let window = NSWindow(contentViewController: hostingController)

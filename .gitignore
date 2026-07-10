@@ -11,3 +11,6 @@ BatKill.app/
 
 # Temp
 */Icon/Sources/.build/
+
+# Cross-compile build
+.build-x86/

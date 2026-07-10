@@ -4,12 +4,16 @@ import SwiftUI
 struct TemperatureView: View {
     @ObservedObject var hardwareMonitor: HardwareMonitor
     @ObservedObject var lm: LocalizationManager
+    @StateObject private var presetStore = FanPresetStore()
     @State private var fanManualModes: [Int: Bool] = [:]
     @State private var fanPendingSpeeds: [Int: Double] = [:]
-    @State private var expandedCategories: Set<TemperatureCategory> = [.cpu]
+    @State private var expandedCategories: Set<TemperatureCategory> = []
     @State private var fanWriteStatus: [Int: String] = [:]
     @State private var fanNeedsAdmin: [Int: Bool] = [:]
     @State private var refreshTimer: Timer?
+    @State private var showingSaveAlert = false
+    @State private var newPresetName = ""
+    @State private var deleteTarget: FanPreset?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,6 +28,7 @@ struct TemperatureView: View {
                 ScrollView {
                     VStack(spacing: 12) {
                         temperatureGroups
+                        presetSection
                         fanSection
                     }
                     .padding()
@@ -34,6 +39,7 @@ struct TemperatureView: View {
         .onAppear {
             hardwareMonitor.refresh()
             initFanStates()
+            applyPreset(presetStore.activePreset)
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
                 hardwareMonitor.refresh()
             }
@@ -218,6 +224,131 @@ struct TemperatureView: View {
         }
     }
 
+    // MARK: - Preset Section
+
+    private var presetSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "fan")
+                    .foregroundColor(.purple)
+                    .font(.caption)
+                Text(lm.translate("Fan Presets", "风扇预设"))
+                    .font(.subheadline).fontWeight(.medium)
+                Spacer()
+            }
+
+            if presetStore.presets.isEmpty {
+                HStack {
+                    Text(lm.translate("No presets saved", "暂无预设"))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button {
+                        showingSaveAlert = true
+                    } label: {
+                        Label(lm.translate("Save Current", "保存当前"), systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+                .padding(.vertical, 4)
+            } else {
+                ForEach(presetStore.presets) { preset in
+                    HStack(spacing: 8) {
+                        Button {
+                            applyPreset(preset)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: presetStore.activePresetID == preset.id ? "checkmark.circle.fill" : "circle")
+                                    .foregroundColor(presetStore.activePresetID == preset.id ? .purple : .secondary)
+                                    .font(.caption)
+                                Text(preset.name)
+                                    .font(.caption)
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        let desc = preset.fanSpeeds.keys.sorted().map { idx in
+                            if preset.fanAutoModes[idx] == true {
+                                return lm.translate("Auto", "自动")
+                            }
+                            return "\(Int(preset.fanSpeeds[idx] ?? 0))"
+                        }.joined(separator: " / ")
+                        Text(desc)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        Button {
+                            applyPreset(preset)
+                        } label: {
+                            Image(systemName: "play.circle.fill")
+                                .foregroundColor(.purple)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            deleteTarget = preset
+                        } label: {
+                            Image(systemName: "trash")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 2)
+
+                    if preset.id != presetStore.presets.last?.id {
+                        Divider().padding(.leading, 8)
+                    }
+                }
+
+                HStack {
+                    Spacer()
+                    Button {
+                        showingSaveAlert = true
+                    } label: {
+                        Label(lm.translate("Save Current", "保存当前"), systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+        .alert(lm.translate("Save Preset", "保存预设"), isPresented: $showingSaveAlert) {
+            TextField(lm.translate("Preset name", "预设名称"), text: $newPresetName)
+            Button(lm.translate("Save", "保存")) {
+                if !newPresetName.isEmpty { saveCurrentAsPreset() }
+            }
+            Button(lm.translate("Cancel", "取消"), role: .cancel) { newPresetName = "" }
+        } message: {
+            let info = hardwareMonitor.fans.map { fan -> String in
+                let isAuto = !(fanManualModes[fan.index] ?? false)
+                if isAuto {
+                    return "\(fan.name): \(lm.translate("Auto", "自动"))"
+                }
+                let speed = Int(fanPendingSpeeds[fan.index] ?? fan.currentSpeed)
+                return "\(fan.name): \(speed) RPM"
+            }.joined(separator: "\n")
+            Text(info + "\n\n" + lm.translate("Enter a name for this preset", "为此预设输入名称"))
+        }
+        .alert(lm.translate("Delete Preset", "删除预设"), isPresented: Binding(
+            get: { deleteTarget != nil },
+            set: { if !$0 { deleteTarget = nil } }
+        )) {
+            Button(lm.translate("Delete", "删除"), role: .destructive) {
+                if let target = deleteTarget { presetStore.remove(target) }
+                deleteTarget = nil
+            }
+            Button(lm.translate("Cancel", "取消"), role: .cancel) { deleteTarget = nil }
+        } message: {
+            Text(lm.translate("Delete this preset?", "确定删除此预设？"))
+        }
+    }
+
     // MARK: - Fan Section
 
     private var fanSection: some View {
@@ -270,12 +401,23 @@ struct TemperatureView: View {
                     get: { isManual },
                     set: { newValue in
                         fanManualModes[fan.index] = newValue
-                        hardwareMonitor.setFanMode(fanIndex: fan.index, auto: !newValue)
-                        if newValue {
-                            fanPendingSpeeds[fan.index] = fan.maxSpeed
-                        }
                         fanWriteStatus[fan.index] = nil
                         fanNeedsAdmin[fan.index] = nil
+
+                        if newValue {
+                            fanPendingSpeeds[fan.index] = fan.currentSpeed
+                            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
+                                fanWriteStatus[fan.index] = ok
+                                    ? lm.translate("Manual mode set", "已设为手动")
+                                    : lm.translate("Failed", "失败")
+                            }
+                        } else {
+                            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { ok in
+                                fanWriteStatus[fan.index] = ok
+                                    ? lm.translate("Auto mode restored", "已恢复自动")
+                                    : lm.translate("Failed", "失败")
+                            }
+                        }
                     }
                 )) {
                     Text(lm.translate("Auto", "自动")).tag(false)
@@ -322,13 +464,14 @@ struct TemperatureView: View {
                 HStack(spacing: 8) {
                     Button {
                         let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
-                        let ok = hardwareMonitor.setFanSpeed(fanIndex: fan.index, speed: speed)
-                        if ok {
-                            fanWriteStatus[fan.index] = lm.translate("Set", "已设定")
-                            fanNeedsAdmin[fan.index] = nil
+                        if hardwareMonitor.isAdminAuthorized {
+                            hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
+                                fanWriteStatus[fan.index] = ok
+                                    ? lm.translate("Set (Admin)", "已设定(管理员)")
+                                    : lm.translate("Failed", "失败")
+                            }
                         } else {
                             fanNeedsAdmin[fan.index] = true
-                            fanWriteStatus[fan.index] = lm.translate("Failed", "失败")
                         }
                     } label: {
                         Label(lm.translate("Set Speed", "设定转速"), systemImage: "checkmark.circle.fill")
@@ -339,14 +482,19 @@ struct TemperatureView: View {
 
                     if fanNeedsAdmin[fan.index] == true {
                         Button {
-                            let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
-                            let ok = hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed)
-                            fanWriteStatus[fan.index] = ok
-                                ? lm.translate("Set (Admin)", "已设定(管理员)")
-                                : lm.translate("Admin Failed", "管理员授权失败")
-                            fanNeedsAdmin[fan.index] = !ok
+                            if hardwareMonitor.requestAdminAuth() {
+                                fanNeedsAdmin[fan.index] = nil
+                                let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
+                                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
+                                    fanWriteStatus[fan.index] = ok
+                                        ? lm.translate("Set (Admin)", "已设定(管理员)")
+                                        : lm.translate("Admin Failed", "管理员授权失败")
+                                }
+                            } else {
+                                fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
+                            }
                         } label: {
-                            Label(lm.translate("Retry as Admin", "以管理员重试"), systemImage: "lock.shield")
+                            Label(lm.translate("Authorize Admin", "授权管理员"), systemImage: "lock.shield")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -375,9 +523,58 @@ struct TemperatureView: View {
                 fanManualModes[fan.index] = !fan.isAutoMode
             }
             if fanPendingSpeeds[fan.index] == nil {
-                fanPendingSpeeds[fan.index] = fan.maxSpeed
+                fanPendingSpeeds[fan.index] = fan.currentSpeed
             }
         }
+    }
+
+    private func applyPreset(_ preset: FanPreset?) {
+        guard let preset = preset else { return }
+
+        let needsAdmin = preset.fanAutoModes.values.contains(false)
+        if needsAdmin && !hardwareMonitor.isAdminAuthorized {
+            if hardwareMonitor.requestAdminAuth() {
+                executePreset(preset)
+            }
+        } else {
+            executePreset(preset)
+        }
+    }
+
+    private func executePreset(_ preset: FanPreset) {
+        presetStore.activate(preset)
+
+        for (index, isAuto) in preset.fanAutoModes {
+            fanManualModes[index] = !isAuto
+            if isAuto {
+                hardwareMonitor.setFanModeWithAdmin(fanIndex: index, auto: true) { _ in }
+                fanWriteStatus[index] = lm.translate("Auto mode restored", "已恢复自动")
+            }
+        }
+
+        for (index, speed) in preset.fanSpeeds {
+            fanPendingSpeeds[index] = speed
+            if preset.fanAutoModes[index] != true {
+                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: index, speed: speed) { [self] ok in
+                    fanWriteStatus[index] = ok
+                        ? lm.translate("Preset applied", "已应用预设")
+                        : lm.translate("Failed", "失败")
+                }
+            }
+        }
+    }
+
+    private func saveCurrentAsPreset() {
+        var speeds: [Int: Double] = [:]
+        var autoModes: [Int: Bool] = [:]
+        for fan in hardwareMonitor.fans {
+            speeds[fan.index] = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
+            autoModes[fan.index] = !(fanManualModes[fan.index] ?? false)
+        }
+        let preset = FanPreset(name: newPresetName, fanSpeeds: speeds, fanAutoModes: autoModes)
+        presetStore.add(preset)
+        presetStore.activate(preset)
+        newPresetName = ""
     }
 
     private func normalizedTemp(_ temp: Double) -> Double {

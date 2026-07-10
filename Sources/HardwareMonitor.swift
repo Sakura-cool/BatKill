@@ -1,5 +1,6 @@
 import Foundation
 import IOKit
+import Security
 
 // MARK: - SMC Data Structures
 private struct SMCKeyInfoData {
@@ -136,14 +137,15 @@ final class HardwareMonitor: ObservableObject {
         fans = readFans()
     }
 
-    // MARK: - Fan Control
+    // MARK: - Fan Control (direct SMC, no admin)
 
-    func setFanMode(fanIndex: Int, auto: Bool) {
+    func setFanMode(fanIndex: Int, auto: Bool) -> Bool {
         let key = String(format: "F%dMd", fanIndex)
         var value: UInt8 = auto ? 0 : 1
         let ok = writeBytes(key: key, bytes: &value, length: 1)
         lastFanWriteOK = ok
         refresh()
+        return ok
     }
 
     func setFanSpeed(fanIndex: Int, speed: Double) -> Bool {
@@ -155,31 +157,93 @@ final class HardwareMonitor: ObservableObject {
 
     private func writeFanTarget(fanIndex: Int, speed: Double) -> Bool {
         let key = String(format: "F%dTg", fanIndex)
-        var value = UInt16(clamping: Int(speed))
-        return writeBytes(key: key, bytes: &value, length: 2)
+        guard let data = readKeyData(key) else { return false }
+
+        if data.dataType == HardwareMonitor.fpe2Type {
+            var value = UInt16(clamping: Int(speed * 4))
+            return writeBytes(key: key, bytes: &value, length: 2)
+        } else if data.dataType == HardwareMonitor.fltType {
+            var value = Float32(speed)
+            return writeBytes(key: key, bytes: &value, length: 4)
+        } else {
+            var value = UInt16(clamping: Int(speed))
+            return writeBytes(key: key, bytes: &value, length: 2)
+        }
     }
 
-    // MARK: - Admin Fan Control
+    // MARK: - Admin Fan Control (one-time auth via AuthorizationServices)
 
-    func setFanSpeedWithAdmin(fanIndex: Int, speed: Double) -> Bool {
-        let execPath = CommandLine.arguments[0]
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        task.arguments = [execPath, "--set-fan", "\(fanIndex)", "\(Int(speed))"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        do {
-            try task.run()
-            task.waitUntilExit()
-            let ok = task.terminationStatus == 0
-            if ok { refresh() }
-            lastFanWriteOK = ok
-            return ok
-        } catch {
-            logger("setFanSpeedWithAdmin failed: \(error)")
-            lastFanWriteOK = false
-            return false
+    private static var authRef: AuthorizationRef?
+    @Published var isAdminAuthorized = false
+
+    func requestAdminAuth() -> Bool {
+        if HardwareMonitor.authRef != nil {
+            isAdminAuthorized = true
+            return true
         }
+
+        var ref: AuthorizationRef?
+        guard AuthorizationCreate(nil, nil, [], &ref) == errAuthorizationSuccess,
+              let ref = ref else { return false }
+
+        let rightName = kAuthorizationRightExecute
+        return rightName.withCString { cName in
+            var item = AuthorizationItem(name: cName, valueLength: 0, value: nil, flags: 0)
+            return withUnsafeMutablePointer(to: &item) { itemPtr in
+                var rights = AuthorizationRights(count: 1, items: itemPtr)
+                let flags: AuthorizationFlags = [.preAuthorize, .extendRights, .interactionAllowed]
+
+                if AuthorizationCopyRights(ref, &rights, nil, flags, nil) == errAuthorizationSuccess {
+                    HardwareMonitor.authRef = ref
+                    isAdminAuthorized = true
+                    return true
+                }
+
+                AuthorizationFree(ref, [.destroyRights])
+                return false
+            }
+        }
+    }
+
+    func runWithAdmin(args: [String], completion: @escaping (Bool) -> Void) {
+        guard let authRef = HardwareMonitor.authRef,
+              let execPath = Bundle.main.executablePath else {
+            completion(false)
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var cArgs = args.map { strdup($0) }
+            defer { cArgs.forEach { free($0) } }
+
+            typealias AuthExecFunc = @convention(c) (
+                AuthorizationRef, UnsafePointer<CChar>, AuthorizationFlags,
+                UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+                ((UnsafeMutableRawPointer?) -> Void)?
+            ) -> OSStatus
+
+            let handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW)
+            if let sym = dlsym(handle, "AuthorizationExecuteWithPrivileges") {
+                let exec = unsafeBitCast(sym, to: AuthExecFunc.self)
+            cArgs.withUnsafeMutableBufferPointer { buf in
+                exec(authRef, execPath, [], buf.baseAddress, nil)
+            }
+            }
+
+            DispatchQueue.main.async {
+                self?.refresh()
+                completion(true)
+            }
+        }
+    }
+
+    func setFanModeWithAdmin(fanIndex: Int, auto: Bool, completion: @escaping (Bool) -> Void) {
+        let mode = auto ? 0 : 1
+        runWithAdmin(args: ["--set-fan-mode", "\(fanIndex)", "\(mode)"], completion: completion)
+    }
+
+    func setFanSpeedWithAdmin(fanIndex: Int, speed: Double, completion: @escaping (Bool) -> Void) {
+        runWithAdmin(args: ["--set-fan", "\(fanIndex)", "\(Int(speed))"], completion: completion)
     }
 
     // MARK: - SMC Connection
@@ -285,15 +349,44 @@ final class HardwareMonitor: ObservableObject {
     private static let fp2eType = FourCharCode(0x66703265)
     private static let fp1aType = FourCharCode(0x66703161)
 
-    private let knownTempKeys: [(key: String, name: String, category: TemperatureCategory)] = [
-        ("Tp01", "CPU P-Core 1",        .cpu),
-        ("Tp05", "CPU P-Core 5",        .cpu),
-        ("Tp09", "CPU P-Core 9",        .cpu),
-        ("Tp0D", "CPU P-Core 13",       .cpu),
-        ("Tp0E", "CPU Die",             .cpu),
-        ("Tp0F", "CPU P-Core",          .cpu),
-        ("Tp0b", "CPU E-Core",          .cpu),
-        ("Tp01", "CPU Performance 1",   .cpu),
+    // Apple Silicon temperature keys - names generated from actual CPU topology
+    // Tp01-Tp05: P-core sensors (one per P-core)
+    // Tp06-Tp07: E-core sensors (one per E-core)
+    // Tp08-Tp09: Additional P-core sensors
+    // Tp0A-Tp0D: Additional E-core sensors
+    // Tp0E: CPU Die
+    // Tp0F: CPU aggregate
+    // Tp0b: E-Core aggregate
+    
+    private var appleSiliconKeys: [(key: String, name: String, category: TemperatureCategory)] {
+        let pCores = Int(getSysctlInt("hw.perflevel0.physicalcpu"))
+        let eCores = Int(getSysctlInt("hw.perflevel1.physicalcpu"))
+        
+        var keys: [(key: String, name: String, category: TemperatureCategory)] = []
+        var pIndex = 0, eIndex = 0
+        
+        for i in 1...0x0D {
+            let hex = String(format: "%X", i)
+            let key = "Tp0\(hex)"
+            
+            if key == "Tp03" || key == "Tp07" { continue }
+            
+            if pIndex < pCores {
+                keys.append((key, "CPU P-Core \(pIndex + 1)", .cpu))
+                pIndex += 1
+            } else if eIndex < eCores {
+                keys.append((key, "CPU E-Core \(eIndex + 1)", .cpu))
+                eIndex += 1
+            }
+        }
+        
+        keys.append(("Tp0E", "CPU Die", .cpu))
+        keys.append(("Tp0b", "CPU E-Core Aggregate", .cpu))
+        
+        return keys
+    }
+    
+    private let intelTempKeys: [(key: String, name: String, category: TemperatureCategory)] = [
         ("TCPU", "CPU Package",         .cpu),
         ("TC0C", "CPU Core 0",          .cpu),
         ("TC1C", "CPU Core 1",          .cpu),
@@ -308,6 +401,10 @@ final class HardwareMonitor: ObservableObject {
         ("TCXD", "CPU Die",             .cpu),
         ("TCXE", "CPU Efficiency",      .cpu),
         ("TCXF", "CPU Performance",     .cpu),
+    ]
+    
+    // Common keys for both Intel and Apple Silicon
+    private let commonTempKeys: [(key: String, name: String, category: TemperatureCategory)] = [
         ("Tg05", "GPU",                 .gpu),
         ("TG0P", "GPU Package",         .gpu),
         ("TG0D", "GPU Die",             .gpu),
@@ -338,17 +435,42 @@ final class HardwareMonitor: ObservableObject {
         ("SP0P", "System",              .other),
         ("TS0C", "System Controller",   .other),
     ]
+    
+    private var knownTempKeys: [(key: String, name: String, category: TemperatureCategory)] {
+        let isAppleSilicon = getSysctlInt("hw.optional.arm64") == 1
+        if isAppleSilicon {
+            return appleSiliconKeys + commonTempKeys
+        } else {
+            return intelTempKeys + commonTempKeys
+        }
+    }
+    
+    private func getSysctlInt(_ name: String) -> Int32 {
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        sysctlbyname(name, &value, &size, nil, 0)
+        return value
+    }
 
     private func readTemperatures() -> [TemperatureSensor] {
         var seen = Set<String>()
         var results: [TemperatureSensor] = []
+        var pCoreTemps: [Double] = []
 
         for item in knownTempKeys {
             guard !seen.contains(item.key) else { continue }
             if let sensor = readTempSensor(key: item.key, name: item.name, category: item.category) {
                 seen.insert(item.key)
                 results.append(sensor)
+                if sensor.name.hasPrefix("CPU P-Core ") && !sensor.name.contains("Aggregate") {
+                    pCoreTemps.append(sensor.temperature)
+                }
             }
+        }
+
+        if !pCoreTemps.isEmpty {
+            let avg = pCoreTemps.reduce(0, +) / Double(pCoreTemps.count)
+            results.append(TemperatureSensor(key: "AGG_P", name: "CPU P-Core Aggregate", temperature: avg, category: .cpu))
         }
 
         return results
