@@ -120,9 +120,8 @@ final class AppLister: ObservableObject {
         if let contents = try? fm.contentsOfDirectory(atPath: agentDir) {
             for item in contents where item.hasSuffix(".plist") {
                 let fullPath = "\(agentDir)/\(item)"
+                guard seen.insert(fullPath).inserted else { continue }
                 let name = (item as NSString).deletingPathExtension
-                let agentId = "launchagent:\(name)"
-                guard seen.insert(agentId).inserted else { continue }
 
                 let (running, pid) = processRuntimeInfo(name)
                 result.append(AppItem(
@@ -131,7 +130,7 @@ final class AppLister: ObservableObject {
                     path: fullPath,
                     processName: name,
                     isRunning: running,
-                    isSelected: savedPaths.contains(agentId),
+                    isSelected: savedPaths.contains(fullPath),
                     isSystemApp: false,
                     category: .launchAgent,
                     pid: pid
@@ -142,36 +141,38 @@ final class AppLister: ObservableObject {
         // ── 4. User launchd services ──
         let userServices = self.userLaunchdServices()
         for svc in userServices {
-            let svcId = "service:\(svc.name)"
-            guard seen.insert(svcId).inserted else { continue }
+            let fullPath = "/usr/local/opt/\(svc.name)"
+            guard seen.insert(fullPath).inserted else { continue }
             result.append(AppItem(
                 name: svc.name,
                 bundleIdentifier: nil,
-                path: "/usr/local/opt/\(svc.name)",
+                path: fullPath,
                 processName: svc.name,
                 isRunning: true,
-                isSelected: savedPaths.contains(svcId),
+                isSelected: savedPaths.contains(fullPath),
                 isSystemApp: false,
                 category: .service,
-                pid: svc.pid
+                pid: svc.pid,
+                serviceLabel: svc.label
             ))
         }
 
         // ── 5. Brew services (all, running or stopped) ──
         let brewServices = self.brewAllServices()
         for svc in brewServices {
-            let svcId = "service:\(svc.name)"
-            guard seen.insert(svcId).inserted else { continue }
+            let fullPath = "/opt/homebrew/opt/\(svc.name)"
+            guard seen.insert(fullPath).inserted else { continue }
             result.append(AppItem(
                 name: svc.name,
                 bundleIdentifier: nil,
-                path: "/opt/homebrew/opt/\(svc.name)",
+                path: fullPath,
                 processName: svc.name,
                 isRunning: svc.isRunning,
-                isSelected: savedPaths.contains(svcId),
+                isSelected: savedPaths.contains(fullPath),
                 isSystemApp: false,
                 category: .service,
-                pid: svc.pid
+                pid: svc.pid,
+                serviceLabel: svc.label
             ))
         }
 
@@ -217,7 +218,7 @@ final class AppLister: ObservableObject {
     }
 
     /// Returns user-space services currently registered with launchd.
-    private func userLaunchdServices() -> [(name: String, pid: Int32)] {
+    private func userLaunchdServices() -> [(name: String, label: String, pid: Int32)] {
         let task = Process()
         task.launchPath = "/bin/launchctl"
         task.arguments = ["list", "gui/\(getuid())"]
@@ -228,7 +229,7 @@ final class AppLister: ObservableObject {
         task.waitUntilExit()
         let data = out.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8) ?? ""
-        var services: [(String, Int32)] = []
+        var services: [(String, String, Int32)] = []
 
         for line in output.components(separatedBy: .newlines).dropFirst() {
             let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
@@ -239,7 +240,7 @@ final class AppLister: ObservableObject {
                !parts[2].hasPrefix("com.apple.") { // skip Apple system services
                 let label = parts[2]
                 let name = label.components(separatedBy: ".").last ?? label
-                services.append((name, pid))
+                services.append((name, label, pid))
             }
         }
         return services
@@ -259,26 +260,21 @@ final class AppLister: ObservableObject {
     }
 
     /// Returns all brew services (running or stopped) via `brew services list`.
-    private func brewAllServices() -> [(name: String, isRunning: Bool, pid: Int32?)] {
+    private func brewAllServices() -> [(name: String, label: String, isRunning: Bool, pid: Int32?)] {
         let output = shellExec("brew services list")
-        var services: [(String, Bool, Int32?)] = []
+        var services: [(String, String, Bool, Int32?)] = []
 
         for line in output.components(separatedBy: .newlines).dropFirst() {
             let parts = line.split(separator: " ", omittingEmptySubsequences: true)
             guard parts.count >= 2 else { continue }
 
             let name = String(parts[0])
-            let status = String(parts[1])
-
             guard !name.isEmpty else { continue }
 
-            if status == "started" || status == "started ~" {
-
-                let pid = self.brewServicePID(name)
-                services.append((name, true, pid))
-            } else {
-                services.append((name, false, nil))
-            }
+            let label = "homebrew.mxcl.\(name)"
+            let pid = self.brewServicePID(name)
+            let isRunning = pid != nil && pid! > 0
+            services.append((name, label, isRunning, pid))
         }
         return services
     }
@@ -299,10 +295,29 @@ final class AppLister: ObservableObject {
 
         for line in output.components(separatedBy: .newlines).dropFirst() {
             let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-            if parts.count >= 1, let pid = Int32(parts[0]) {
+            if parts.count >= 1, let pid = Int32(parts[0]), pid > 0 {
                 return pid
             }
         }
+        
+        let pgrep = Process()
+        pgrep.launchPath = "/usr/bin/pgrep"
+        pgrep.arguments = ["-x", name]
+        let pgrepOut = Pipe()
+        pgrep.standardOutput = pgrepOut
+        pgrep.standardError = Pipe()
+        guard (try? pgrep.run()) != nil else { return nil }
+        pgrep.waitUntilExit()
+        let pgrepData = pgrepOut.fileHandleForReading.readDataToEndOfFile()
+        let pgrepOutput = String(data: pgrepData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let pid = pgrepOutput.components(separatedBy: .newlines).first.flatMap({ Int32($0) }), pid > 0 {
+            return pid
+        }
+        
+        if FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.colima/default/docker.sock") {
+            return 1
+        }
+        
         return nil
     }
 }

@@ -32,6 +32,57 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
+    var pendingRestoreAppIds: [String] { killedRestorePaths }
+
+    func removePending(_ appId: String) {
+        var paths = killedRestorePaths
+        paths.removeAll { $0 == appId }
+        killedRestorePaths = paths
+    }
+
+    func restorePendingSingle(_ appId: String, using apps: [AppItem]) {
+        if let name = restoreSingleApp(appId, using: apps) {
+            removePending(appId)
+            restoreCount += 1
+            postRestoreNotification(names: [name])
+        }
+    }
+
+    func restoreSelected(_ apps: [AppItem], completion: (() -> Void)? = nil) {
+        let selectedPaths = Set(apps.filter { $0.isSelected }.map(\.id))
+        let toRestore = killedRestorePaths.filter { selectedPaths.contains($0) }
+        guard !toRestore.isEmpty else {
+            logger("restoreSelected: no selected apps in pending list")
+            DispatchQueue.main.async { completion?() }
+            return
+        }
+        logger("restoreSelected: restoring \(toRestore)")
+        isRestoring = true
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            var restoredNames: [String] = []
+
+            for appId in toRestore {
+                if let name = self.restoreSingleApp(appId, using: apps) {
+                    restoredNames.append(name)
+                }
+            }
+
+            DispatchQueue.main.async {
+                var paths = self.killedRestorePaths
+                paths.removeAll { toRestore.contains($0) }
+                self.killedRestorePaths = paths
+                self.restoreCount += restoredNames.count
+                self.isRestoring = false
+                if !restoredNames.isEmpty {
+                    self.postRestoreNotification(names: restoredNames)
+                }
+                completion?()
+            }
+        }
+    }
+
     // ──────────────────────────────────────────────
     // MARK: - Kill (Public API)
     // ──────────────────────────────────────────────
@@ -129,7 +180,7 @@ final class ProcessKiller: ObservableObject {
             return (appId as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
         }
 
-        else if appId.hasPrefix("launchagent:"), let app = apps.first(where: { $0.id == appId }) {
+        else if let app = apps.first(where: { $0.id == appId }), app.category == .launchAgent {
             let proc = Process()
             proc.launchPath = "/bin/launchctl"
             proc.arguments = ["bootstrap", "gui/\(getuid())", app.path]
@@ -138,22 +189,45 @@ final class ProcessKiller: ObservableObject {
             return app.name
         }
 
-        else if appId.hasPrefix("brew:") {
-            let name = String(appId.dropFirst("brew:".count))
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/bash")
-            task.arguments = ["-l", "-c", "brew services start \(name)"]
-            task.standardOutput = Pipe()
-            task.standardError = Pipe()
-            try? task.run()
-            task.waitUntilExit()
-            if task.terminationStatus == 0 {
-                return apps.first(where: { $0.id == appId })?.name ?? name
+        else if let app = apps.first(where: { $0.id == appId }), app.category == .service {
+            let directStart = Process()
+            directStart.executableURL = URL(fileURLWithPath: "/bin/bash")
+            directStart.arguments = ["-l", "-c", "\(app.processName) start"]
+            directStart.standardOutput = Pipe()
+            directStart.standardError = Pipe()
+            if (try? directStart.run()) != nil {
+                directStart.waitUntilExit()
+                if directStart.terminationStatus == 0 { return app.name }
             }
+
+            if app.serviceLabel?.hasPrefix("homebrew.mxcl.") == true {
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/bin/bash")
+                task.arguments = ["-l", "-c", "brew services start \(app.processName)"]
+                task.standardOutput = Pipe()
+                task.standardError = Pipe()
+                try? task.run()
+                task.waitUntilExit()
+                if task.terminationStatus == 0 { return app.name }
+            }
+            
+            if let label = app.serviceLabel {
+                let plistPath = findPlistPath(for: label)
+                if let plistPath = plistPath {
+                    let proc = Process()
+                    proc.launchPath = "/bin/launchctl"
+                    proc.arguments = ["bootstrap", "gui/\(getuid())", plistPath]
+                    proc.standardOutput = Pipe()
+                    proc.standardError = Pipe()
+                    try? proc.run()
+                    proc.waitUntilExit()
+                    if proc.terminationStatus == 0 { return app.name }
+                }
+            }
+            
             return nil
         }
 
-        // services: skip — they are managed by launchd / brew
         return nil
     }
 
@@ -164,7 +238,7 @@ final class ProcessKiller: ObservableObject {
         switch app.category {
         case .application:  return killApplication(app)
         case .launchAgent:  return unloadLaunchAgent(app)
-        case .service:      return app.id.hasPrefix("brew:") ? stopBrewService(app) : killProcessByPid(app)
+        case .service:      return stopService(app)
         case .custom:       return killProcessByPid(app)
         }
     }
@@ -234,16 +308,57 @@ final class ProcessKiller: ObservableObject {
         killProcessByName(name)
     }
 
-    private func stopBrewService(_ app: AppItem) -> Bool {
-        let name = app.processName
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/bash")
-        task.arguments = ["-l", "-c", "brew services stop \(name)"]
-        task.standardOutput = Pipe()
-        task.standardError = Pipe()
-        guard (try? task.run()) != nil else { return false }
-        task.waitUntilExit()
-        return task.terminationStatus == 0
+    private func stopService(_ app: AppItem) -> Bool {
+        let directStop = Process()
+        directStop.executableURL = URL(fileURLWithPath: "/bin/bash")
+        directStop.arguments = ["-l", "-c", "\(app.processName) stop"]
+        directStop.standardOutput = Pipe()
+        directStop.standardError = Pipe()
+        if (try? directStop.run()) != nil {
+            directStop.waitUntilExit()
+            if directStop.terminationStatus == 0 { return true }
+        }
+
+        let brewStop = Process()
+        brewStop.executableURL = URL(fileURLWithPath: "/bin/bash")
+        brewStop.arguments = ["-l", "-c", "brew services stop \(app.processName)"]
+        brewStop.standardOutput = Pipe()
+        brewStop.standardError = Pipe()
+        if (try? brewStop.run()) != nil {
+            brewStop.waitUntilExit()
+            if brewStop.terminationStatus == 0 { return true }
+        }
+        
+        if let label = app.serviceLabel {
+            let target = "gui/\(getuid())/\(label)"
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            proc.arguments = ["bootout", target]
+            proc.standardOutput = Pipe()
+            proc.standardError = Pipe()
+            if (try? proc.run()) != nil { proc.waitUntilExit() }
+        }
+        
+        Thread.sleep(forTimeInterval: 1)
+        return killProcessByName(app.processName)
+    }
+
+    private func findPlistPath(for label: String) -> String? {
+        let userAgentsDir = NSHomeDirectory() + "/Library/LaunchAgents"
+        let fm = FileManager.default
+        
+        if let contents = try? fm.contentsOfDirectory(atPath: userAgentsDir) {
+            for item in contents where item.hasSuffix(".plist") {
+                let fullPath = "\(userAgentsDir)/\(item)"
+                if let dict = NSDictionary(contentsOfFile: fullPath),
+                   let loadedLabel = dict["Label"] as? String,
+                   loadedLabel == label {
+                    return fullPath
+                }
+            }
+        }
+        
+        return nil
     }
 
     // ──────────────────────────────────────────────

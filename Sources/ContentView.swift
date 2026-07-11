@@ -13,10 +13,13 @@ struct ContentView: View {
 
     @AppStorage("autoKillEnabled") private var autoKillEnabled = false
     @AppStorage("launchAtLogin")   private var launchAtLogin   = false
+    @AppStorage("fanTemperatureThreshold") private var tempThreshold: Double = 98
 
     @State private var searchText      = ""
     @State private var showOnlyRunning = false
     @State private var showSystemApps  = false
+    @State private var showSelectedSheet = false
+    @State private var showPendingRestoreSheet = false
 
     // ──────────────────────────────────────────────
     // MARK: - Filtered Apps
@@ -78,12 +81,28 @@ struct ContentView: View {
             Button {
                 NotificationCenter.default.post(name: .showTemperature, object: nil)
             } label: {
-                Image(systemName: "thermometer.medium")
-                    .font(.system(size: 16))
-                    .foregroundColor(.red)
-                    .frame(width: 28, height: 28)
-                    .background(Color.red.opacity(0.1))
-                    .cornerRadius(6)
+                ZStack {
+                    Image(systemName: "thermometer.medium")
+                        .font(.system(size: 16))
+                        .foregroundColor(.red)
+                        .frame(width: 28, height: 28)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(6)
+
+                    Text(String(format: "%d", Int(hardwareMonitor.maxCPUTemp)))
+                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 3)
+                        .padding(.vertical, 1)
+                        .background(
+                            Capsule()
+                                .fill(hardwareMonitor.maxCPUTemp >= tempThreshold
+                                      ? Color.red
+                                      : Color.orange)
+                        )
+                        .offset(x: 6, y: 10)
+                }
+                .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
             .help(lm.translate("Temperature & Fan Control", "温度与风扇控制"))
@@ -91,7 +110,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text("BatKill").font(.title2).fontWeight(.semibold)
-                    Text("\(versionChecker.currentVersion) · \(archLabel)")
+                    Text("\(versionChecker.currentVersion)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .padding(.horizontal, 6)
@@ -99,6 +118,9 @@ struct ContentView: View {
                         .background(Color.secondary.opacity(0.12))
                         .cornerRadius(4)
                 }
+                Text("\(archLabel) · \(hardwareInfo)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
                 Text(powerStatusText)
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -122,11 +144,24 @@ struct ContentView: View {
     }
 
     private var archLabel: String {
-        #if arch(arm64)
-        return "Apple Silicon"
-        #else
-        return "Intel"
-        #endif
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        var brand = [CChar](repeating: 0, count: size)
+        sysctlbyname("machdep.cpu.brand_string", &brand, &size, nil, 0)
+        return String(cString: brand)
+    }
+
+    private var hardwareInfo: String {
+        var memSize: UInt64 = 0
+        var memLen = MemoryLayout<UInt64>.size
+        sysctlbyname("hw.memsize", &memSize, &memLen, nil, 0)
+        let ramGB = memSize / 1024 / 1024 / 1024
+
+        let attrs = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())
+        let totalSize = (attrs?[.systemSize] as? UInt64) ?? 0
+        let totalGB = totalSize / 1000 / 1000 / 1000
+
+        return "RAM \(ramGB)GB · ROM \(totalGB)GB"
     }
 
     private var batterySourceLabel: String {
@@ -175,7 +210,9 @@ struct ContentView: View {
     // MARK: - Filter Bar
     // ──────────────────────────────────────────────
     private var filterBar: some View {
-        HStack(spacing: 8) {
+        let runningCount = filteredApps.filter(\.isRunning).count
+        let systemCount = filteredApps.filter(\.isSystemApp).count
+        return HStack(spacing: 8) {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundColor(.secondary)
                 TextField("", text: $searchText, prompt: Text(lm.translate("Search apps…", "搜索应用…")))
@@ -191,9 +228,9 @@ struct ContentView: View {
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(6)
 
-            Toggle(lm.translate("Running", "运行中"), isOn: $showOnlyRunning)
+            Toggle("\(lm.translate("Running", "运行中")) \(runningCount)", isOn: $showOnlyRunning)
                 .toggleStyle(.checkbox).controlSize(.small).font(.caption)
-            Toggle(lm.translate("System", "系统"), isOn: $showSystemApps)
+            Toggle("\(lm.translate("System", "系统")) \(systemCount)", isOn: $showSystemApps)
                 .toggleStyle(.checkbox).controlSize(.small).font(.caption)
         }
     }
@@ -254,11 +291,32 @@ struct ContentView: View {
                     ProgressView().scaleEffect(0.5).frame(width: 12)
                 }
 
-                // Stats
-                let runningCount = appLister.apps.filter(\.isRunning).count
                 let selectedCount = appLister.apps.filter(\.isSelected).count
-                Text(statString(selected: selectedCount, running: runningCount))
-                    .font(.caption2).foregroundColor(.secondary)
+                let pendingCount = processKiller.pendingRestoreCount
+                HStack(spacing: 2) {
+                    Button { showSelectedSheet = true } label: {
+                        Text("\(lm.translate("Selected", "已选")) \(selectedCount)")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(selectedCount == 0)
+                    .sheet(isPresented: $showSelectedSheet) {
+                        SelectedAppsSheet(appLister: appLister, lm: lm)
+                    }
+
+                    if pendingCount > 0 {
+                        Text("·")
+                            .font(.caption2).foregroundColor(.secondary)
+                        Button { showPendingRestoreSheet = true } label: {
+                            Text("\(pendingCount) \(lm.translate("pending", "待恢复"))")
+                                .font(.caption2).foregroundColor(.blue)
+                        }
+                        .buttonStyle(.plain)
+                        .sheet(isPresented: $showPendingRestoreSheet) {
+                            PendingRestoreSheet(processKiller: processKiller, appLister: appLister, lm: lm)
+                        }
+                    }
+                }
 
                 Spacer()
 
@@ -270,7 +328,7 @@ struct ContentView: View {
                 .font(.caption)
 
                 // Kill button
-                Button { processKiller.killSelected(appLister.apps) } label: {
+                Button { processKiller.killSelected(appLister.apps) { appLister.refreshAppList() } } label: {
                     Label(lm.translate("Kill Selected", "停止选中"), systemImage: "bolt.fill")
                         .font(.caption)
                 }
@@ -278,6 +336,15 @@ struct ContentView: View {
                 .tint(.red)
                 .disabled(processKiller.isKilling
                           || !appLister.apps.contains(where: { $0.isSelected && $0.isRunning }))
+
+                Button { processKiller.restoreSelected(appLister.apps) { appLister.refreshAppList() } } label: {
+                    Label(lm.translate("Restore Selected", "恢复选中"), systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .disabled(processKiller.isRestoring
+                          || processKiller.pendingRestoreCount == 0)
 
                 if processKiller.isKilling {
                     ProgressView().scaleEffect(0.5).frame(width: 12)
@@ -336,20 +403,6 @@ struct ContentView: View {
                 }
             }
         }
-    }
-
-    private func statString(selected: Int, running: Int) -> String {
-        let pending = processKiller.pendingRestoreCount
-        if pending > 0 {
-            return lm.translate(
-                "\(selected) selected · \(running) running · \(pending) pending restore",
-                "已选 \(selected) · 运行 \(running) · \(pending) 待恢复"
-            )
-        }
-        return lm.translate(
-            "\(selected) selected · \(running) running",
-            "已选 \(selected) · 运行 \(running)"
-        )
     }
 
     // ──────────────────────────────────────────────
@@ -465,6 +518,261 @@ private struct AppRow: View {
 
     private var categoryLabel: String {
         switch app.category {
+        case .application:  return lm.translate("App", "应用")
+        case .service:      return lm.translate("Background Service", "后台服务")
+        case .launchAgent:  return lm.translate("Launch Agent", "启动代理")
+        case .custom:       return lm.translate("Custom", "自定义")
+        }
+    }
+}
+
+// MARK: - Selected Apps Sheet
+private struct SelectedAppsSheet: View {
+    @ObservedObject var appLister: AppLister
+    @ObservedObject var lm: LocalizationManager
+    @Environment(\.dismiss) private var dismiss
+
+    private var selectedApps: [AppItem] {
+        appLister.apps.filter(\.isSelected)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(lm.translate("Selected Apps", "已选程序"))
+                    .font(.headline)
+                Spacer()
+                Text("\(selectedApps.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+
+            Divider()
+
+            if selectedApps.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "checkmark.circle")
+                        .font(.title)
+                        .foregroundColor(.secondary)
+                    Text(lm.translate("No apps selected", "没有选中的程序"))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(selectedApps) { app in
+                            HStack(spacing: 8) {
+                                icon(for: app)
+                                    .frame(width: 20, height: 20)
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(app.name)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                    Text(categoryLabel(for: app))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Spacer()
+
+                                if app.isRunning {
+                                    Circle()
+                                        .fill(Color.green)
+                                        .frame(width: 6, height: 6)
+                                }
+
+                                Button {
+                                    appLister.toggleApp(app)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 12)
+
+                            if app.id != selectedApps.last?.id {
+                                Divider().padding(.leading, 40)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button(lm.translate("Done", "完成")) {
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding()
+        }
+        .frame(width: 360, height: 400)
+    }
+
+    @ViewBuilder
+    private func icon(for app: AppItem) -> some View {
+        if app.category == .application,
+           let nsImg = NSWorkspace.shared.icon(forFile: app.path) as NSImage? {
+            Image(nsImage: nsImg)
+                .resizable()
+        } else {
+            Image(systemName: systemIcon(for: app))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func systemIcon(for app: AppItem) -> String {
+        switch app.category {
+        case .application:  return "app"
+        case .service:      return "gearshape.2"
+        case .launchAgent:  return "bolt"
+        case .custom:       return "questionmark"
+        }
+    }
+
+    private func categoryLabel(for app: AppItem) -> String {
+        switch app.category {
+        case .application:  return lm.translate("App", "应用")
+        case .service:      return lm.translate("Background Service", "后台服务")
+        case .launchAgent:  return lm.translate("Launch Agent", "启动代理")
+        case .custom:       return lm.translate("Custom", "自定义")
+        }
+    }
+}
+
+// MARK: - Pending Restore Sheet
+private struct PendingRestoreSheet: View {
+    @ObservedObject var processKiller: ProcessKiller
+    @ObservedObject var appLister: AppLister
+    @ObservedObject var lm: LocalizationManager
+    @Environment(\.dismiss) private var dismiss
+
+    private var pendingApps: [(id: String, name: String, category: AppCategory)] {
+        processKiller.pendingRestoreAppIds.compactMap { appId in
+            if let app = appLister.apps.first(where: { $0.id == appId }) {
+                return (appId, app.name, app.category)
+            }
+            return (appId, (appId as NSString).lastPathComponent, .custom)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(lm.translate("Pending Restore", "待恢复程序"))
+                    .font(.headline)
+                Spacer()
+                Text("\(pendingApps.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+
+            Divider()
+
+            if pendingApps.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "checkmark.circle")
+                        .font(.title)
+                        .foregroundColor(.secondary)
+                    Text(lm.translate("Nothing pending", "没有待恢复的程序"))
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(pendingApps, id: \.id) { item in
+                            HStack(spacing: 8) {
+                                Image(systemName: systemIcon(for: item.category))
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 20, height: 20)
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(item.name)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                    Text(categoryLabel(for: item.category))
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Spacer()
+
+                                Button {
+                                    withAnimation {
+                                        processKiller.removePending(item.id)
+                                    }
+                                } label: {
+                                    Text(lm.translate("Delete", "删除"))
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(.red)
+
+                                Button {
+                                    processKiller.restorePendingSingle(item.id, using: appLister.apps)
+                                    appLister.refreshAppList()
+                                } label: {
+                                    Text(lm.translate("Restore", "恢复"))
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .tint(.green)
+                            }
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 12)
+
+                            if item.id != pendingApps.last?.id {
+                                Divider().padding(.leading, 36)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button(lm.translate("Done", "完成")) {
+                    appLister.refreshAppList()
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding()
+        }
+        .frame(width: 400, height: 400)
+    }
+
+    private func systemIcon(for category: AppCategory) -> String {
+        switch category {
+        case .application:  return "app"
+        case .service:      return "gearshape.2"
+        case .launchAgent:  return "bolt"
+        case .custom:       return "questionmark"
+        }
+    }
+
+    private func categoryLabel(for category: AppCategory) -> String {
+        switch category {
         case .application:  return lm.translate("App", "应用")
         case .service:      return lm.translate("Background Service", "后台服务")
         case .launchAgent:  return lm.translate("Launch Agent", "启动代理")

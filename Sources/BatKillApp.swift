@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingPowerAction: Bool?     // nil=none, true=battery(kill), false=AC(restore)
     private var powerActionInProgress = false
     private var powerDelayTimer: Timer?
-    private let powerActionDelaySeconds: TimeInterval = 5
+    private let powerActionDelaySeconds: TimeInterval = 30
 
     // ──────────────────────────────────────────────
     // MARK: - Single Instance
@@ -254,6 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if onBattery {
             if autoKillEnabled {
                 processKiller.killSelected(appLister.apps) { [weak self] in
+                    self?.appLister.refreshAppList()
                     self?.onPowerActionCompleted()
                 }
             } else {
@@ -261,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             processKiller.restoreKilledApps(using: appLister.apps) { [weak self] in
+                self?.appLister.refreshAppList()
                 self?.onPowerActionCompleted()
             }
         }
@@ -271,7 +273,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         powerActionInProgress = false
         logger("onPowerActionCompleted: pending=\(pendingPowerAction != nil), starting \(powerActionDelaySeconds)s delay")
 
-        guard pendingPowerAction != nil else { return }
+        guard let onBattery = pendingPowerAction else { return }
+
+        let msg: String
+        if onBattery {
+            msg = localizationManager.translate(
+                "Battery: will stop selected apps in \(Int(powerActionDelaySeconds))s",
+                "电池供电：\(Int(powerActionDelaySeconds))秒后停止选中程序")
+        } else {
+            msg = localizationManager.translate(
+                "AC connected: will restore stopped apps in \(Int(powerActionDelaySeconds))s",
+                "已接通电源：\(Int(powerActionDelaySeconds))秒后恢复已停止程序")
+        }
+        menuBarManager?.showBriefNotification(msg)
 
         powerDelayTimer = Timer.scheduledTimer(withTimeInterval: powerActionDelaySeconds, repeats: false) { [weak self] _ in
             guard let self = self else { return }

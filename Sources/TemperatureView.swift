@@ -579,8 +579,8 @@ struct TemperatureView: View {
                             get: { pendingSpeed },
                             set: { fanPendingSpeeds[fan.index] = $0 }
                         ),
-                        in: fan.minSpeed...fan.maxSpeed,
-                        step: max(1, fan.maxSpeed / 200)
+                        in: 0...fan.maxSpeed,
+                        step: pendingSpeed <= 1200 ? 100 : 1
                     )
 
                     Image(systemName: "plus")

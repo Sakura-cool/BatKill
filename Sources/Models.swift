@@ -20,9 +20,10 @@ struct AppItem: Identifiable, Codable, Equatable {
     var isSystemApp: Bool = false
     var category: AppCategory = .application
     var pid: Int32?
+    var serviceLabel: String?  // launchd label for services (e.g., "homebrew.mxcl.colima")
 
     enum CodingKeys: String, CodingKey {
-        case name, bundleIdentifier, path, processName, isSelected, isSystemApp, category
+        case name, bundleIdentifier, path, processName, isSelected, isSystemApp, category, serviceLabel
         // isRunning and pid are transient — re-evaluated on each refresh
     }
 }

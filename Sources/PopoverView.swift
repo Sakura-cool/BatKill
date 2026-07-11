@@ -49,7 +49,7 @@ struct PopoverView: View {
             // ── Quick actions ──
             HStack(spacing: 8) {
                 Button {
-                    processKiller.killSelected(appLister.apps)
+                    processKiller.killSelected(appLister.apps) { appLister.refreshAppList() }
                 } label: {
                     Label(lm.translate("Kill Now", "立即停止"), systemImage: "bolt.fill")
                         .font(.caption)

@@ -143,6 +143,65 @@ final class MenuBarManager: NSObject, ObservableObject {
         if popover.isShown { popover.performClose(nil) }
         NotificationCenter.default.post(name: .showSettings, object: nil)
     }
+
+    // ──────────────────────────────────────────────
+    // MARK: - Brief tooltip notification
+    // ──────────────────────────────────────────────
+    private var notificationWindow: NSWindow?
+
+    func showBriefNotification(_ message: String, duration: TimeInterval = 3) {
+        guard let button = statusItem.button else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            self.notificationWindow?.close()
+
+            let label = NSTextField(labelWithString: message)
+            label.font = .systemFont(ofSize: 12, weight: .medium)
+            label.textColor = .white
+            label.backgroundColor = NSColor(white: 0.15, alpha: 0.92)
+            label.isBezeled = false
+            label.isEditable = false
+            label.alignment = .center
+            label.sizeToFit()
+
+            let padding: CGFloat = 12
+            let contentSize = NSSize(
+                width: label.frame.width + padding * 2,
+                height: label.frame.height + padding * 2)
+            label.frame.origin = NSPoint(x: padding, y: padding)
+
+            let panel = NSPanel(
+                contentRect: .zero,
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false)
+            panel.level = .statusBar
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.contentView = NSView(frame: NSRect(origin: .zero, size: contentSize))
+            panel.contentView?.wantsLayer = true
+            panel.contentView?.layer?.cornerRadius = 6
+            panel.contentView?.layer?.backgroundColor = NSColor(white: 0.15, alpha: 0.92).cgColor
+            panel.contentView?.addSubview(label)
+            panel.contentView?.frame = NSRect(origin: .zero, size: contentSize)
+            panel.setContentSize(contentSize)
+
+            if let btnFrame = button.window?.frame {
+                let panelX = btnFrame.midX - contentSize.width / 2
+                let panelY = btnFrame.minY - contentSize.height - 6
+                panel.setFrameOrigin(NSPoint(x: panelX, y: panelY))
+            }
+
+            panel.orderFront(nil)
+            self.notificationWindow = panel
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+                self?.notificationWindow?.close()
+                self?.notificationWindow = nil
+            }
+        }
+    }
 }
 
 extension Notification.Name {
