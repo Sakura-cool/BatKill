@@ -202,7 +202,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil as NSWindow?)
         settingsWindow = window
-        settingsWindow = window
         activateApp()
     }
 
@@ -322,21 +321,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger("processNextPowerAction: executing for isOnBattery=\(onBattery)")
 
         if onBattery {
-            // Battery mode: kill selected running apps (if auto-kill is enabled)
             if autoKillEnabled {
                 processKiller.killSelected(appLister.apps) { [weak self] in
                     self?.appLister.refreshAppList()
-                    self?.onPowerActionCompleted()
+                    self?.onPowerActionCompleted(onBattery: onBattery)
                 }
             } else {
-                // Auto-kill disabled, skip directly to cooldown
-                onPowerActionCompleted()
+                onPowerActionCompleted(onBattery: onBattery)
             }
         } else {
-            // AC mode: restore previously killed apps
             processKiller.restoreKilledApps(using: appLister.apps) { [weak self] in
                 self?.appLister.refreshAppList()
-                self?.onPowerActionCompleted()
+                self?.onPowerActionCompleted(onBattery: onBattery)
             }
         }
     }
@@ -345,14 +341,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// or is skipped. Starts the cooldown timer before allowing the next
     /// queued action to proceed. If a new power transition arrived during
     /// the operation, it will be processed after the cooldown expires.
-    private func onPowerActionCompleted() {
+    private func onPowerActionCompleted(onBattery: Bool) {
         powerActionInProgress = false
         logger("onPowerActionCompleted: pending=\(pendingPowerAction != nil), starting \(powerActionDelaySeconds)s delay")
 
-        guard let onBattery = pendingPowerAction else { return }
-
-        // Show a brief tooltip notification under the menu-bar icon
-        // telling the user what will happen after the cooldown.
         let msg: String
         if onBattery {
             msg = localizationManager.translate(
@@ -365,8 +357,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menuBarManager?.showBriefNotification(msg)
 
-        // Start the cooldown timer. When it fires, processNextPowerAction()
-        // will pick up any action that arrived during the cooldown.
         powerDelayTimer = Timer.scheduledTimer(withTimeInterval: powerActionDelaySeconds, repeats: false) { [weak self] _ in
             guard let self = self else { return }
             self.powerDelayTimer = nil

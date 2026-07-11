@@ -209,15 +209,13 @@ final class MenuBarManager: NSObject, ObservableObject {
     /// Shows a brief tooltip-style notification below the menu-bar icon.
     /// The notification is a borderless NSPanel with a dark background
     /// and white text. It auto-dismisses after `duration` seconds.
-    func showBriefNotification(_ message: String, duration: TimeInterval = 3) {
+    func showBriefNotification(_ message: String, duration: TimeInterval = 10) {
         guard let button = statusItem.button else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // Close any existing notification
             self.notificationWindow?.close()
 
-            // Create the label
             let label = NSTextField(labelWithString: message)
             label.font = .systemFont(ofSize: 12, weight: .medium)
             label.textColor = .white
@@ -233,7 +231,6 @@ final class MenuBarManager: NSObject, ObservableObject {
                 height: label.frame.height + padding * 2)
             label.frame.origin = NSPoint(x: padding, y: padding)
 
-            // Create a borderless, non-activating panel
             let panel = NSPanel(
                 contentRect: .zero,
                 styleMask: [.borderless, .nonactivatingPanel],
@@ -250,22 +247,32 @@ final class MenuBarManager: NSObject, ObservableObject {
             panel.contentView?.frame = NSRect(origin: .zero, size: contentSize)
             panel.setContentSize(contentSize)
 
-            // Position below the status-item button, centered horizontally
             if let btnFrame = button.window?.frame {
                 let panelX = btnFrame.midX - contentSize.width / 2
                 let panelY = btnFrame.minY - contentSize.height - 6
                 panel.setFrameOrigin(NSPoint(x: panelX, y: panelY))
             }
 
+            let clickGesture = NSClickGestureRecognizer(target: self, action: #selector(self.notificationClicked))
+            panel.contentView?.addGestureRecognizer(clickGesture)
+
             panel.orderFront(nil)
             self.notificationWindow = panel
 
-            // Auto-dismiss after the specified duration
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
-                self?.notificationWindow?.close()
-                self?.notificationWindow = nil
+                self?.dismissNotification()
             }
         }
+    }
+
+    @objc private func notificationClicked() {
+        dismissNotification()
+    }
+
+    private func dismissNotification() {
+        guard notificationWindow != nil else { return }
+        notificationWindow?.close()
+        notificationWindow = nil
     }
 }
 
