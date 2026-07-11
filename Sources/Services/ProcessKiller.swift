@@ -8,7 +8,8 @@
 //  - Applications: NSRunningApplication.terminate() -> .forceTerminate()
 //    -> SIGTERM -> SIGKILL -> killall (escalating force)
 //  - Launch Agents: launchctl bootout -> killall fallback
-//  - Services: direct "<name> stop" -> brew services stop -> launchctl bootout -> killall
+//  - Services: direct "<name> stop" -> killall -> detect respawn,
+//             patch plist (temporary KeepAlive=crash-only), reload, kill again
 //  - Custom processes: SIGTERM -> SIGKILL by PID -> killall fallback
 //
 //  Restore strategy:
@@ -254,6 +255,14 @@ final class ProcessKiller: ObservableObject {
         }
 
         else if let app = apps.first(where: { $0.id == appId }), app.category == .service {
+            // Restore original KeepAlive if BatKill patched it during kill
+            if let label = app.serviceLabel {
+                let restored = restoreKeepAlive(label: label)
+                if restored {
+                    logger("restoreSingleApp: restored original KeepAlive for \(label)")
+                }
+            }
+
             // Strategy 1: Try direct start command
             let directStart = Process()
             directStart.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -387,14 +396,30 @@ final class ProcessKiller: ObservableObject {
         killProcessByName(name)
     }
 
-    /// Stops a background service using a three-tier strategy:
+    /// Stops a background service using a two-pass strategy that preserves
+    /// the user's launchd plist for next-login auto-start.
     ///
-    /// 1. Direct `<processName> stop` (works for services with their own CLI)
-    /// 2. `brew services stop <processName>` (for Homebrew-managed services)
-    /// 3. `launchctl bootout gui/<uid>/<label>` (for launchd-registered services)
-    /// 4. `killall` as a final fallback after a 1-second grace period
+    /// Pass 1 — Try to stop the process cleanly:
+    ///   1. Direct `<processName> stop`
+    ///   2. `killall` by process name
+    ///
+    /// Pass 2 — If launchd respawned it (KeepAlive=true):
+    ///   1. Save the original KeepAlive value to UserDefaults
+    ///   2. Temporarily set plist to `KeepAlive = { SuccessfulExit = false }`
+    ///      (crash restarts → restart on non-zero exit only)
+    ///   3. `launchctl bootout` then `bootstrap` to reload patched plist
+    ///   4. Kill again — clean exit (exit 0) → launchd won't restart
+    ///
+    /// On restore, the original KeepAlive is written back so the plist
+    /// is fully restored to the user's original configuration.
+    ///
+    /// Works correctly for ALL plist configurations:
+    ///   - No KeepAlive:             Pass 1 stops it, process stays dead ✓
+    ///   - KeepAlive SuccessfulExit=false: Pass 1 exit 0, no restart ✓
+    ///   - KeepAlive=true:           Pass 1 respawns → Pass 2 patches &
+    ///                               re-registers → clean exit sticks ✓
     private func stopService(_ app: AppItem) -> Bool {
-        // Strategy 1: Direct service stop command
+        // ── Pass 1: Try to stop the process ──
         let directStop = Process()
         directStop.executableURL = URL(fileURLWithPath: "/bin/bash")
         directStop.arguments = ["-l", "-c", "\(app.processName) stop"]
@@ -402,34 +427,119 @@ final class ProcessKiller: ObservableObject {
         directStop.standardError = Pipe()
         if (try? directStop.run()) != nil {
             directStop.waitUntilExit()
-            if directStop.terminationStatus == 0 { return true }
+        }
+        killProcessByName(app.processName)
+
+        // ── Pass 2: Check if launchd respawned it ──
+        Thread.sleep(forTimeInterval: 1.5)
+        if runningProcessExists(app.processName), let label = app.serviceLabel {
+            logger("stopService: launchd respawned \(app.processName), patching plist")
+            patchPlistForKillOnce(label: label, serviceName: app.processName)
         }
 
-        // Strategy 2: Homebrew services stop
-        let brewStop = Process()
-        brewStop.executableURL = URL(fileURLWithPath: "/bin/bash")
-        brewStop.arguments = ["-l", "-c", "brew services stop \(app.processName)"]
-        brewStop.standardOutput = Pipe()
-        brewStop.standardError = Pipe()
-        if (try? brewStop.run()) != nil {
-            brewStop.waitUntilExit()
-            if brewStop.terminationStatus == 0 { return true }
+        return !runningProcessExists(app.processName)
+    }
+
+    /// Temporarily patches a service's launchd plist so that `KeepAlive`
+    /// only restarts on crash (non-zero exit), not on manual stop.
+    ///
+    /// Saves the original KeepAlive value to UserDefaults so
+    /// `restoreSingleApp()` can restore it on AC return.
+    private func patchPlistForKillOnce(label: String, serviceName: String) {
+        guard let plistPath = findPlistPath(for: label),
+              let dict = NSMutableDictionary(contentsOfFile: plistPath)
+        else { return }
+
+        // Save original KeepAlive to UserDefaults
+        let keepAliveKey = "batkill_originalKeepAlive_\(label)"
+        if let originalKeepAlive = dict["KeepAlive"] {
+            if let data = try? JSONSerialization.data(withJSONObject: originalKeepAlive, options: .fragmentsAllowed),
+               let json = String(data: data, encoding: .utf8) {
+                UserDefaults.standard.set(json, forKey: keepAliveKey)
+            }
+        } else {
+            UserDefaults.standard.removeObject(forKey: keepAliveKey)
         }
-        
-        // Strategy 3: launchctl bootout
-        if let label = app.serviceLabel {
-            let target = "gui/\(getuid())/\(label)"
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            proc.arguments = ["bootout", target]
-            proc.standardOutput = Pipe()
-            proc.standardError = Pipe()
-            if (try? proc.run()) != nil { proc.waitUntilExit() }
+
+        // Set KeepAlive to crash-only: restart on non-zero exit only
+        dict["KeepAlive"] = ["SuccessfulExit": false]
+
+        guard dict.write(toFile: plistPath, atomically: true) else {
+            logger("patchPlistForKillOnce: failed to write plist")
+            return
         }
-        
-        // Give the process time to exit, then force-kill by name
-        Thread.sleep(forTimeInterval: 1)
-        return killProcessByName(app.processName)
+
+        // Reload the plist: bootout old service, bootstrap patched one
+        launchctlManage(action: "bootout", label: label)
+        Thread.sleep(forTimeInterval: 0.3)
+        let loaded = launchctlManage(action: "bootstrap", label: label, plistPath: plistPath)
+
+        // Kill — clean exit (exit 0) → launchd won't restart (SuccessfulExit=false)
+        Thread.sleep(forTimeInterval: 0.5)
+        killProcessByName(serviceName)
+        if loaded {
+            Thread.sleep(forTimeInterval: 0.5)
+            killProcessByName(serviceName)
+        }
+    }
+
+    /// Restores the original KeepAlive value saved by `patchPlistForKillOnce`
+    /// back into the plist and reloads it via launchctl.
+    /// Returns `true` on success, `false` if nothing to restore.
+    private func restoreKeepAlive(label: String) -> Bool {
+        let keepAliveKey = "batkill_originalKeepAlive_\(label)"
+        guard let json = UserDefaults.standard.string(forKey: keepAliveKey),
+              let data = json.data(using: .utf8),
+              let originalKeepAlive = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed),
+              let plistPath = findPlistPath(for: label),
+              let dict = NSMutableDictionary(contentsOfFile: plistPath)
+        else { return false }
+
+        // Write back the original KeepAlive value
+        if let keepAliveDict = originalKeepAlive as? [String: Any] {
+            dict["KeepAlive"] = keepAliveDict
+        } else {
+            // Original was a plain boolean or absent — remove the key
+            dict.removeObject(forKey: "KeepAlive")
+        }
+
+        guard dict.write(toFile: plistPath, atomically: true) else {
+            logger("restoreKeepAlive: failed to write plist for \(label)")
+            return false
+        }
+
+        UserDefaults.standard.removeObject(forKey: keepAliveKey)
+        return true
+    }
+
+    /// Runs `launchctl <action> gui/<uid>/<label>` or `launchctl bootstrap gui/<uid> <plistPath>`.
+    /// Returns `true` if the command succeeded.
+    @discardableResult
+    private func launchctlManage(action: String, label: String, plistPath: String? = nil) -> Bool {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        if action == "bootstrap", let plistPath = plistPath {
+            proc.arguments = ["bootstrap", "gui/\(getuid())", plistPath]
+        } else {
+            proc.arguments = [action, "gui/\(getuid())/\(label)"]
+        }
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
+        guard (try? proc.run()) != nil else { return false }
+        proc.waitUntilExit()
+        return proc.terminationStatus == 0
+    }
+
+    /// Checks whether at least one process with the given name is alive.
+    private func runningProcessExists(_ name: String) -> Bool {
+        let proc = Process()
+        proc.launchPath = "/usr/bin/pgrep"
+        proc.arguments = ["-x", name]
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
+        guard (try? proc.run()) != nil else { return false }
+        proc.waitUntilExit()
+        return proc.terminationStatus == 0
     }
 
     /// Searches ~/Library/LaunchAgents/ for a plist file whose "Label"
