@@ -22,12 +22,14 @@ echo "🚧 Building $APP_NAME for $ARCH …"
 # ── Compile ──
 mkdir -p "$BUILD_DIR"
 
+SWIFT_FILES=$(find "$SRC_DIR" -name '*.swift' | sort)
+
 swiftc \
   -sdk "$SDK_PATH" \
   -target "$TARGET" \
   -parse-as-library \
   -o "$BUILD_DIR/$APP_NAME" \
-  "$SRC_DIR"/*.swift \
+  $SWIFT_FILES \
   -framework SwiftUI \
   -framework AppKit \
   -framework IOKit \

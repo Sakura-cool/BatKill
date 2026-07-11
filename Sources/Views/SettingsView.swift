@@ -1,8 +1,33 @@
+//  SettingsView.swift
+//  BatKill
+//
+//  Main settings panel displayed when the user opens the Settings window
+//  from the menu bar. Shows all discovered applications in a filterable,
+//  searchable list with checkboxes for selecting which apps to kill on
+//  battery power.
+//
+//  Layout structure (top to bottom):
+//    1. Header     -- power icon, app name, version, hardware info, status badge
+//    2. Auto-Kill  -- toggle switch for automatic kill on battery
+//    3. Filter Bar -- search field + running/system toggles
+//    4. App List   -- scrollable list of AppRowView items
+//    5. Bottom Bar -- refresh, selected count, toggle-all, kill/restore, language, auto-start
+//
+//  This view was previously named `ContentView` in the flat Sources/ directory.
+//  The type was renamed to `SettingsView` to better reflect its purpose.
+
 import SwiftUI
 import ServiceManagement
 
-// MARK: - Content View
-struct ContentView: View {
+// MARK: - Settings View (formerly ContentView)
+
+/// The primary settings panel of BatKill. Requires all 7 environment objects
+/// to function: BatteryMonitor, AppLister, ProcessKiller, LocalizationManager,
+/// VersionChecker, Updater, and HardwareMonitor.
+struct SettingsView: View {
+
+    // MARK: - Environment Objects
+
     @EnvironmentObject var batteryMonitor: BatteryMonitor
     @EnvironmentObject var appLister: AppLister
     @EnvironmentObject var processKiller: ProcessKiller
@@ -11,19 +36,33 @@ struct ContentView: View {
     @EnvironmentObject var updater: Updater
     @EnvironmentObject var hardwareMonitor: HardwareMonitor
 
+    // MARK: - Persisted Preferences
+
+    /// Whether automatic kill-on-battery is enabled.
     @AppStorage("autoKillEnabled") private var autoKillEnabled = false
+    /// Whether the app launches automatically at login.
     @AppStorage("launchAtLogin")   private var launchAtLogin   = false
+    /// CPU temperature threshold (degrees C) at which fan control reverts to system.
     @AppStorage("fanTemperatureThreshold") private var tempThreshold: Double = 98
 
+    // MARK: - Local UI State
+
+    /// Text entered in the search field to filter the app list by name.
     @State private var searchText      = ""
+    /// When true, only currently-running apps are shown.
     @State private var showOnlyRunning = false
+    /// When true, system-level apps are included in the list.
     @State private var showSystemApps  = false
+    /// Controls presentation of the "Selected Apps" sheet.
     @State private var showSelectedSheet = false
+    /// Controls presentation of the "Pending Restore" sheet.
     @State private var showPendingRestoreSheet = false
 
     // ──────────────────────────────────────────────
     // MARK: - Filtered Apps
     // ──────────────────────────────────────────────
+
+    /// The app list after applying the current search text and filter toggles.
     private var filteredApps: [AppItem] {
         var result = appLister.apps
 
@@ -42,6 +81,7 @@ struct ContentView: View {
     // ──────────────────────────────────────────────
     // MARK: - Body
     // ──────────────────────────────────────────────
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -71,13 +111,18 @@ struct ContentView: View {
     // ──────────────────────────────────────────────
     // MARK: - Header
     // ──────────────────────────────────────────────
+
+    /// Top section showing power status icon, temperature badge, app name,
+    /// version, hardware info, and a battery/AC status pill.
     private var header: some View {
         HStack(spacing: 12) {
+            // Power state icon with pulse animation
             Image(systemName: batteryMonitor.isOnBattery ? "battery.25" : "powerplug.fill")
                 .font(.system(size: 28))
                 .foregroundColor(batteryMonitor.isOnBattery ? .orange : .green)
                 .symbolEffect(.pulse, value: batteryMonitor.isOnBattery)
 
+            // Temperature badge -- tapping opens the Temperature window
             Button {
                 NotificationCenter.default.post(name: .showTemperature, object: nil)
             } label: {
@@ -107,6 +152,7 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help(lm.translate("Temperature & Fan Control", "温度与风扇控制"))
 
+            // App name, version, and hardware info
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text("BatKill").font(.title2).fontWeight(.semibold)
@@ -132,6 +178,7 @@ struct ContentView: View {
         }
     }
 
+    /// Displays the current power source and battery percentage.
     private var powerStatusText: String {
         if batteryMonitor.isOnBattery {
             lm.translate(
@@ -143,6 +190,7 @@ struct ContentView: View {
         }
     }
 
+    /// Retrieves the CPU brand string via sysctl (e.g. "Apple M2 Pro").
     private var archLabel: String {
         var size = 0
         sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
@@ -151,6 +199,7 @@ struct ContentView: View {
         return String(cString: brand)
     }
 
+    /// Returns a string summarizing RAM and disk (ROM) sizes.
     private var hardwareInfo: String {
         var memSize: UInt64 = 0
         var memLen = MemoryLayout<UInt64>.size
@@ -164,12 +213,14 @@ struct ContentView: View {
         return "RAM \(ramGB)GB · ROM \(totalGB)GB"
     }
 
+    /// Localized label for the current power source ("Battery" / "AC Power").
     private var batterySourceLabel: String {
         batteryMonitor.isOnBattery
             ? lm.translate("Battery", "电池")
             : lm.translate("AC Power", "交流电")
     }
 
+    /// Pill-shaped badge showing battery or AC status with a colored background.
     private var statusBadge: some View {
         Group {
             if batteryMonitor.isOnBattery {
@@ -191,6 +242,8 @@ struct ContentView: View {
     // ──────────────────────────────────────────────
     // MARK: - Auto-Kill Toggle
     // ──────────────────────────────────────────────
+
+    /// Toggle bar for enabling/disabling automatic kill on battery power.
     private var autoKillBar: some View {
         HStack {
             Image(systemName: autoKillEnabled ? "shield.fill" : "shield.slash")
@@ -209,10 +262,13 @@ struct ContentView: View {
     // ──────────────────────────────────────────────
     // MARK: - Filter Bar
     // ──────────────────────────────────────────────
+
+    /// Search field and filter toggles (running only, system apps).
     private var filterBar: some View {
         let runningCount = filteredApps.filter(\.isRunning).count
         let systemCount = filteredApps.filter(\.isSystemApp).count
         return HStack(spacing: 8) {
+            // Search field
             HStack {
                 Image(systemName: "magnifyingglass").foregroundColor(.secondary)
                 TextField("", text: $searchText, prompt: Text(lm.translate("Search apps…", "搜索应用…")))
@@ -238,6 +294,10 @@ struct ContentView: View {
     // ──────────────────────────────────────────────
     // MARK: - App List
     // ──────────────────────────────────────────────
+
+    /// Scrollable list of apps. Shows a loading spinner while scanning,
+    /// an empty-state view when no apps match filters, or a LazyVStack
+    /// of AppRowView items.
     private var appList: some View {
         Group {
             if appLister.isLoading {
@@ -260,7 +320,7 @@ struct ContentView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(filteredApps) { app in
-                            AppRow(app: app, lm: lm, onToggle: { appLister.toggleApp(app) })
+                            AppRowView(app: app, lm: lm, onToggle: { appLister.toggleApp(app) })
                             if app.id != filteredApps.last?.id {
                                 Divider().padding(.leading, 44)
                             }
@@ -276,10 +336,15 @@ struct ContentView: View {
     // ──────────────────────────────────────────────
     // MARK: - Bottom Bar
     // ──────────────────────────────────────────────
+
+    /// Bottom toolbar containing refresh, selected count, pending restore,
+    /// toggle-all, kill/restore buttons, language picker, auto-start toggle,
+    /// and update notification.
     private var bottomBar: some View {
         VStack(spacing: 6) {
             // Top row: actions
             HStack(spacing: 8) {
+                // Refresh app list
                 Button { appLister.refreshAppList() } label: {
                     Label(lm.translate("Refresh", "刷新"), systemImage: "arrow.clockwise")
                 }
@@ -291,6 +356,7 @@ struct ContentView: View {
                     ProgressView().scaleEffect(0.5).frame(width: 12)
                 }
 
+                // Selected / Pending counts with sheet triggers
                 let selectedCount = appLister.apps.filter(\.isSelected).count
                 let pendingCount = processKiller.pendingRestoreCount
                 HStack(spacing: 2) {
@@ -320,14 +386,14 @@ struct ContentView: View {
 
                 Spacer()
 
-                // Toggle All
+                // Toggle All (select/deselect all non-system apps)
                 Button { toggleAll() } label: {
                     Text(lm.translate("Toggle All", "切换全选"))
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
 
-                // Kill button
+                // Kill Selected -- terminates all selected running apps
                 Button { processKiller.killSelected(appLister.apps) { appLister.refreshAppList() } } label: {
                     Label(lm.translate("Kill Selected", "停止选中"), systemImage: "bolt.fill")
                         .font(.caption)
@@ -337,6 +403,7 @@ struct ContentView: View {
                 .disabled(processKiller.isKilling
                           || !appLister.apps.contains(where: { $0.isSelected && $0.isRunning }))
 
+                // Restore Selected -- restarts previously killed apps
                 Button { processKiller.restoreSelected(appLister.apps) { appLister.refreshAppList() } } label: {
                     Label(lm.translate("Restore Selected", "恢复选中"), systemImage: "arrow.clockwise")
                         .font(.caption)
@@ -350,15 +417,14 @@ struct ContentView: View {
                     ProgressView().scaleEffect(0.5).frame(width: 12)
                 }
 
-                // Restore indicator
                 if processKiller.isRestoring {
                     ProgressView().scaleEffect(0.5).frame(width: 12)
                 }
             }
 
-            // Bottom row: language + auto-start
+            // Bottom row: language + auto-start + update
             HStack(spacing: 8) {
-                // Language switcher
+                // Language segmented picker
                 Picker("", selection: $lm.currentLanguage) {
                     ForEach(Language.allCases, id: \.self) { lang in
                         Text(lang.displayName).tag(lang)
@@ -369,7 +435,7 @@ struct ContentView: View {
 
                 Spacer()
 
-                // Launch at login
+                // Launch at login toggle
                 Toggle(isOn: $launchAtLogin.onChange(updateLaunchAtLogin)) {
                     Text(lm.translate("Auto-start", "开机自启"))
                         .font(.caption)
@@ -381,6 +447,7 @@ struct ContentView: View {
                     "登录时自动启动 BatKill"
                 ))
 
+                // Update button / progress
                 if versionChecker.hasUpdate, let ver = versionChecker.latestVersion {
                     if updater.isDownloading {
                         ProgressView(value: updater.downloadProgress)
@@ -408,6 +475,9 @@ struct ContentView: View {
     // ──────────────────────────────────────────────
     // MARK: - Actions
     // ──────────────────────────────────────────────
+
+    /// Toggles selection for all non-system apps. If all are currently
+    /// selected, deselects all. Otherwise, selects all.
     private func toggleAll() {
         let targets = appLister.apps.filter { !$0.isSystemApp }
         let allSelected = targets.allSatisfy(\.isSelected)
@@ -418,6 +488,8 @@ struct ContentView: View {
         }
     }
 
+    /// Registers or unregisters the app as a login item via SMAppService.
+    /// Reverts the toggle if the operation fails.
     private func updateLaunchAtLogin(_ enabled: Bool) {
         do {
             if enabled {
@@ -426,370 +498,10 @@ struct ContentView: View {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            print("⚠️ Failed to update login item: \(error)")
+            print("Failed to update login item: \(error)")
             launchAtLogin = !enabled // revert
         }
     }
 }
 
-// MARK: - App Row
-private struct AppRow: View {
-    let app: AppItem
-    let lm: LocalizationManager
-    let onToggle: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            // Checkbox
-            Toggle("", isOn: Binding(
-                get: { app.isSelected },
-                set: { _ in onToggle() }
-            ))
-            .toggleStyle(.checkbox)
-            .controlSize(.small)
-
-            // Icon
-            icon
-                .frame(width: 20, height: 20)
-
-            // Name + category
-            VStack(alignment: .leading, spacing: 1) {
-                Text(app.name)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .help(app.path)
-                Text(categoryLabel)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-
-            Spacer()
-
-            // Running indicator
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(app.isRunning ? Color.green : Color.secondary.opacity(0.4))
-                    .frame(width: 7, height: 7)
-                Text(app.isRunning
-                     ? lm.translate("Running", "运行中")
-                     : lm.translate("Stopped", "已停止"))
-                    .font(.caption2)
-                    .foregroundColor(app.isRunning ? .green : .secondary)
-            }
-
-            // System badge
-            if app.isSystemApp {
-                Text(lm.translate("System", "系统"))
-                    .font(.caption2)
-                    .foregroundColor(.orange)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.orange.opacity(0.12))
-                    .cornerRadius(4)
-            }
-        }
-        .padding(.vertical, 5)
-        .padding(.horizontal, 8)
-        .opacity(app.isSystemApp && !app.isRunning ? 0.55 : 1.0)
-        .contentShape(Rectangle())
-        .onTapGesture { onToggle() }
-    }
-
-    @ViewBuilder
-    private var icon: some View {
-        if app.category == .application,
-           let nsImg = NSWorkspace.shared.icon(forFile: app.path) as NSImage? {
-            Image(nsImage: nsImg)
-                .resizable()
-        } else {
-            Image(systemName: systemIcon)
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private var systemIcon: String {
-        switch app.category {
-        case .application:  return "app"
-        case .service:      return "gearshape.2"
-        case .launchAgent:  return "bolt"
-        case .custom:       return "questionmark"
-        }
-    }
-
-    private var categoryLabel: String {
-        switch app.category {
-        case .application:  return lm.translate("App", "应用")
-        case .service:      return lm.translate("Background Service", "后台服务")
-        case .launchAgent:  return lm.translate("Launch Agent", "启动代理")
-        case .custom:       return lm.translate("Custom", "自定义")
-        }
-    }
-}
-
-// MARK: - Selected Apps Sheet
-private struct SelectedAppsSheet: View {
-    @ObservedObject var appLister: AppLister
-    @ObservedObject var lm: LocalizationManager
-    @Environment(\.dismiss) private var dismiss
-
-    private var selectedApps: [AppItem] {
-        appLister.apps.filter(\.isSelected)
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(lm.translate("Selected Apps", "已选程序"))
-                    .font(.headline)
-                Spacer()
-                Text("\(selectedApps.count)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .padding()
-
-            Divider()
-
-            if selectedApps.isEmpty {
-                VStack(spacing: 8) {
-                    Spacer()
-                    Image(systemName: "checkmark.circle")
-                        .font(.title)
-                        .foregroundColor(.secondary)
-                    Text(lm.translate("No apps selected", "没有选中的程序"))
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(selectedApps) { app in
-                            HStack(spacing: 8) {
-                                icon(for: app)
-                                    .frame(width: 20, height: 20)
-
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(app.name)
-                                        .font(.subheadline)
-                                        .lineLimit(1)
-                                    Text(categoryLabel(for: app))
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-
-                                Spacer()
-
-                                if app.isRunning {
-                                    Circle()
-                                        .fill(Color.green)
-                                        .frame(width: 6, height: 6)
-                                }
-
-                                Button {
-                                    appLister.toggleApp(app)
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundColor(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 12)
-
-                            if app.id != selectedApps.last?.id {
-                                Divider().padding(.leading, 40)
-                            }
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button(lm.translate("Done", "完成")) {
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
-            .padding()
-        }
-        .frame(width: 360, height: 400)
-    }
-
-    @ViewBuilder
-    private func icon(for app: AppItem) -> some View {
-        if app.category == .application,
-           let nsImg = NSWorkspace.shared.icon(forFile: app.path) as NSImage? {
-            Image(nsImage: nsImg)
-                .resizable()
-        } else {
-            Image(systemName: systemIcon(for: app))
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private func systemIcon(for app: AppItem) -> String {
-        switch app.category {
-        case .application:  return "app"
-        case .service:      return "gearshape.2"
-        case .launchAgent:  return "bolt"
-        case .custom:       return "questionmark"
-        }
-    }
-
-    private func categoryLabel(for app: AppItem) -> String {
-        switch app.category {
-        case .application:  return lm.translate("App", "应用")
-        case .service:      return lm.translate("Background Service", "后台服务")
-        case .launchAgent:  return lm.translate("Launch Agent", "启动代理")
-        case .custom:       return lm.translate("Custom", "自定义")
-        }
-    }
-}
-
-// MARK: - Pending Restore Sheet
-private struct PendingRestoreSheet: View {
-    @ObservedObject var processKiller: ProcessKiller
-    @ObservedObject var appLister: AppLister
-    @ObservedObject var lm: LocalizationManager
-    @Environment(\.dismiss) private var dismiss
-
-    private var pendingApps: [(id: String, name: String, category: AppCategory)] {
-        processKiller.pendingRestoreAppIds.compactMap { appId in
-            if let app = appLister.apps.first(where: { $0.id == appId }) {
-                return (appId, app.name, app.category)
-            }
-            return (appId, (appId as NSString).lastPathComponent, .custom)
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(lm.translate("Pending Restore", "待恢复程序"))
-                    .font(.headline)
-                Spacer()
-                Text("\(pendingApps.count)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .padding()
-
-            Divider()
-
-            if pendingApps.isEmpty {
-                VStack(spacing: 8) {
-                    Spacer()
-                    Image(systemName: "checkmark.circle")
-                        .font(.title)
-                        .foregroundColor(.secondary)
-                    Text(lm.translate("Nothing pending", "没有待恢复的程序"))
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                }
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(pendingApps, id: \.id) { item in
-                            HStack(spacing: 8) {
-                                Image(systemName: systemIcon(for: item.category))
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 20, height: 20)
-
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(item.name)
-                                        .font(.subheadline)
-                                        .lineLimit(1)
-                                    Text(categoryLabel(for: item.category))
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-
-                                Spacer()
-
-                                Button {
-                                    withAnimation {
-                                        processKiller.removePending(item.id)
-                                    }
-                                } label: {
-                                    Text(lm.translate("Delete", "删除"))
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .tint(.red)
-
-                                Button {
-                                    processKiller.restorePendingSingle(item.id, using: appLister.apps)
-                                    appLister.refreshAppList()
-                                } label: {
-                                    Text(lm.translate("Restore", "恢复"))
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .tint(.green)
-                            }
-                            .padding(.vertical, 6)
-                            .padding(.horizontal, 12)
-
-                            if item.id != pendingApps.last?.id {
-                                Divider().padding(.leading, 36)
-                            }
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button(lm.translate("Done", "完成")) {
-                    appLister.refreshAppList()
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-            }
-            .padding()
-        }
-        .frame(width: 400, height: 400)
-    }
-
-    private func systemIcon(for category: AppCategory) -> String {
-        switch category {
-        case .application:  return "app"
-        case .service:      return "gearshape.2"
-        case .launchAgent:  return "bolt"
-        case .custom:       return "questionmark"
-        }
-    }
-
-    private func categoryLabel(for category: AppCategory) -> String {
-        switch category {
-        case .application:  return lm.translate("App", "应用")
-        case .service:      return lm.translate("Background Service", "后台服务")
-        case .launchAgent:  return lm.translate("Launch Agent", "启动代理")
-        case .custom:       return lm.translate("Custom", "自定义")
-        }
-    }
-}
-
-// MARK: - Binding.onChange helper (macOS 13+ compatible)
-extension Binding {
-    func onChange(_ handler: @escaping (Value) -> Void) -> Binding<Value> {
-        Binding(
-            get: { self.wrappedValue },
-            set: { newValue in
-                self.wrappedValue = newValue
-                handler(newValue)
-            }
-        )
-    }
-}
+// Binding.onChange helper is defined in Core/Extensions.swift

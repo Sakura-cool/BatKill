@@ -1,11 +1,32 @@
+//  Updater.swift
+//  BatKill
+//
+//  In-app update system that checks for new releases on GitHub, compares
+//  version numbers, downloads the architecture-appropriate zip, and
+//  performs a hot-swap installation (download -> unzip -> replace bundle
+//  -> relaunch).
+//
+//  Components:
+//  - GitHubRelease / ReleaseAsset: Decodable models for the GitHub Releases API
+//  - VersionChecker: Async version comparison (current vs. latest release)
+//  - Updater: Download, extract, and install with progress tracking
+
 import Foundation
 import AppKit
 
 // MARK: - GitHub Release Model
+
+/// Decodable model for a GitHub release object from the REST API.
+/// Maps JSON fields to Swift properties using custom CodingKeys for
+/// snake_case -> camelCase conversion.
 struct GitHubRelease: Decodable {
+    /// Git tag name (e.g., "v0.0.13").
     let tagName: String
+    /// Human-readable release title.
     let name: String
+    /// Release notes body (may contain Markdown).
     let body: String?
+    /// Attached binary assets (zip files for arm64/x86_64).
     let assets: [ReleaseAsset]
 
     enum CodingKeys: String, CodingKey {
@@ -14,8 +35,12 @@ struct GitHubRelease: Decodable {
     }
 }
 
+/// Decodable model for a release asset (downloadable file) attached to
+/// a GitHub release.
 struct ReleaseAsset: Decodable {
+    /// Filename (e.g., "BatKill-arm.app.zip").
     let name: String
+    /// Direct download URL for the asset.
     let browserDownloadURL: String
 
     enum CodingKeys: String, CodingKey {
@@ -25,17 +50,32 @@ struct ReleaseAsset: Decodable {
 }
 
 // MARK: - Version Checker
+
+/// Checks the GitHub releases API for new versions and compares them
+/// against the currently running app version.
+///
+/// Publishes `hasUpdate` to drive the UI's update badge. Call
+/// `checkForUpdate()` to trigger an async check.
 final class VersionChecker: ObservableObject {
+    /// The latest version string from GitHub (nil until first check).
     @Published var latestVersion: String?
+
+    /// Whether a newer version is available.
     @Published var hasUpdate = false
+
+    /// Whether a network check is in progress.
     @Published var isLoading = false
 
+    /// GitHub API endpoint for the latest release.
     private let repoAPIURL = "https://api.github.com/repos/Sakura-cool/BatKill/releases/latest"
 
+    /// The app's current version from Info.plist (CFBundleShortVersionString).
     var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
 
+    /// Fetches the latest release from GitHub and compares version numbers.
+    /// Updates `latestVersion` and `hasUpdate` on the main thread.
     func checkForUpdate() {
         isLoading = true
         guard let url = URL(string: repoAPIURL) else { return }
@@ -53,6 +93,7 @@ final class VersionChecker: ObservableObject {
                 return
             }
 
+            // Strip "v" prefix for numeric comparison
             let remote = release.tagName.replacingOccurrences(of: "v", with: "")
             logger("Updater: current=\(self?.currentVersion ?? "?"), remote=\(remote)")
 
@@ -63,6 +104,8 @@ final class VersionChecker: ObservableObject {
         }.resume()
     }
 
+    /// Compares a remote version string against the local version using
+    /// semantic versioning (major.minor.patch), component by component.
     private func isNewer(remote: String) -> Bool {
         let local = currentVersion.split(separator: ".").map { Int($0) ?? 0 }
         let remoteParts = remote.split(separator: ".").map { Int($0) ?? 0 }
@@ -78,17 +121,42 @@ final class VersionChecker: ObservableObject {
 }
 
 // MARK: - Updater
+
+/// Handles the full update lifecycle: download, extract, install, relaunch.
+///
+/// The installation process:
+/// 1. Downloads the architecture-appropriate zip from GitHub Releases
+/// 2. Extracts to a temporary directory
+/// 3. Writes a background shell script that:
+///    a. Waits for the current process to exit
+///    b. Removes quarantine attributes from the new bundle
+///    c. Replaces the old bundle with `ditto`
+///    d. Ensures executable permissions
+///    e. Removes quarantine on the final location
+///    f. Relaunches the app and cleans up
+/// 4. Launches the script in the background
+/// 5. Terminates the current process
 final class Updater: ObservableObject {
+    /// Whether a download is currently in progress.
     @Published var isDownloading = false
+
+    /// Download progress as a fraction (0.0 - 1.0).
     @Published var downloadProgress: Double = 0
+
+    /// User-facing status message (e.g., "Downloading v0.0.14...").
     @Published var statusMessage: String?
 
+    /// Reference to the version checker for accessing the latest version.
     private let checker: VersionChecker
 
+    /// - Parameter checker: The version checker providing the target version.
     init(checker: VersionChecker) {
         self.checker = checker
     }
 
+    /// Downloads the latest release zip and installs it.
+    /// Selects the correct asset (arm64 vs x86_64) based on the
+    /// current architecture.
     func downloadAndInstall() {
         guard let tagName = checker.latestVersion else { return }
         let assetName = currentArch() == "arm64" ? "BatKill-arm.app.zip" : "BatKill-x86.app.zip"
@@ -118,6 +186,7 @@ final class Updater: ObservableObject {
             self?.installFromZip(tempURL: tempURL)
         }
 
+        // Observe download progress for the UI progress bar
         let observation = task.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
             DispatchQueue.main.async {
                 self?.downloadProgress = progress.fractionCompleted
@@ -127,6 +196,9 @@ final class Updater: ObservableObject {
         _ = observation
     }
 
+    /// Extracts the downloaded zip, finds the .app bundle inside, writes
+    /// an update script, launches it in the background, and terminates
+    /// the current process.
     private func installFromZip(tempURL: URL) {
         let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("BatKill-update-\(UUID().uuidString)")
 
@@ -143,6 +215,7 @@ final class Updater: ObservableObject {
 
             let currentAppPath = Bundle.main.bundlePath
 
+            // Background update script: wait for exit, replace bundle, relaunch
             let script = """
             #!/bin/bash
             # Wait for the running process to fully exit
@@ -178,11 +251,13 @@ final class Updater: ObservableObject {
 
             logger("Updater: launching background update script, then terminating")
 
+            // Launch the update script detached from the current process
             let bg = Process()
             bg.executableURL = URL(fileURLWithPath: "/bin/bash")
             bg.arguments = ["-c", "nohup \"\(scriptPath.path)\" > /dev/null 2>&1 &"]
             try bg.run()
 
+            // Give the background script time to start, then terminate
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 NSApplication.shared.terminate(nil)
             }
@@ -193,6 +268,8 @@ final class Updater: ObservableObject {
         }
     }
 
+    /// Recursively searches a directory for the first `.app` bundle.
+    /// Used to find the extracted application in the temporary directory.
     private func findApp(in directory: URL) -> URL? {
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: directory,
@@ -212,6 +289,7 @@ final class Updater: ObservableObject {
         return nil
     }
 
+    /// Executes a shell command synchronously via `/bin/zsh -c`.
     private func runShell(_ script: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -220,6 +298,7 @@ final class Updater: ObservableObject {
         process.waitUntilExit()
     }
 
+    /// Returns the current CPU architecture string ("arm64" or "x86_64").
     private func currentArch() -> String {
         #if arch(arm64)
         return "arm64"

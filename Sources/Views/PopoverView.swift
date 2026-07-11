@@ -1,15 +1,49 @@
+//  PopoverView.swift
+//  BatKill
+//
+//  The compact popover panel shown when the user left-clicks the menu-bar
+//  icon. Displays the current power status, a badge count, quick action
+//  buttons (Kill Now / Settings), a language picker, and a summary line.
+//
+//  This is NOT the full settings window -- it is a lightweight status
+//  dashboard. The full settings panel is hosted by SettingsView in a
+//  separate NSWindow.
+//
+//  Architecture:
+//    - Hosted inside an NSPopover by MenuBarManager
+//    - Receives BatteryMonitor, AppLister, ProcessKiller, and
+//      LocalizationManager as ObservedObjects (not EnvironmentObjects)
+//    - "Settings" button posts .showSettings notification, which
+//      AppDelegate handles by opening the SettingsView window
+
 import SwiftUI
 
 // MARK: - Popover Content (shown from menu bar)
+
+/// Compact status popover displayed on left-click of the menu-bar icon.
+/// Shows power state, badge count, quick actions, and language switcher.
 struct PopoverView: View {
+
+    // MARK: - Observed Objects
+
+    /// Monitors battery/AC state and battery percentage.
     @ObservedObject var batteryMonitor: BatteryMonitor
+
+    /// Provides the list of installed apps and their selection state.
     @ObservedObject var appLister: AppLister
+
+    /// Manages kill/restore operations and pending restore count.
     @ObservedObject var processKiller: ProcessKiller
+
+    /// Provides translations and the current language selection.
     @ObservedObject var lm: LocalizationManager
+
+    // MARK: - Body
 
     var body: some View {
         VStack(spacing: 12) {
             // ── Header ──
+            // Power icon, app title, and badge count
             HStack {
                 Image(systemName: batteryMonitor.isOnBattery ? "battery.25" : "powerplug.fill")
                     .font(.title3)
@@ -20,7 +54,8 @@ struct PopoverView: View {
                 badgeView
             }
 
-            // ── Power status bar ──
+            // ── Power Status Bar ──
+            // Colored dot + battery percentage or "AC Power"
             HStack {
                 Circle()
                     .fill(batteryMonitor.isOnBattery ? Color.orange : Color.green)
@@ -33,7 +68,8 @@ struct PopoverView: View {
 
             Divider()
 
-            // ── Badge explanation ──
+            // ── Badge Explanation ──
+            // Contextual text explaining what the badge number means
             VStack(spacing: 4) {
                 HStack {
                     Image(systemName: batteryMonitor.isOnBattery ? "arrow.triangle.2.circlepath" : "bolt.slash")
@@ -46,7 +82,8 @@ struct PopoverView: View {
                 }
             }
 
-            // ── Quick actions ──
+            // ── Quick Actions ──
+            // "Kill Now" (immediate) and "Settings" (opens full panel)
             HStack(spacing: 8) {
                 Button {
                     processKiller.killSelected(appLister.apps) { appLister.refreshAppList() }
@@ -70,7 +107,8 @@ struct PopoverView: View {
                 .buttonStyle(.bordered)
             }
 
-            // ── Language ──
+            // ── Language Picker ──
+            // Segmented control to switch between English and Chinese
             Picker("", selection: $lm.currentLanguage) {
                 ForEach(Language.allCases, id: \.self) { lang in
                     Text(lang.displayName).tag(lang)
@@ -79,7 +117,8 @@ struct PopoverView: View {
             .pickerStyle(.segmented)
             .frame(maxWidth: 200)
 
-            // ── Status info ──
+            // ── Status Info ──
+            // Total app count and running count summary
             Text(statusInfo)
                 .font(.caption2)
                 .foregroundColor(.secondary)
@@ -88,7 +127,10 @@ struct PopoverView: View {
         .frame(width: 260)
     }
 
-    // ── Badge in popover ──
+    // MARK: - Badge View
+
+    /// Capsule-shaped badge in the top-right corner showing either the
+    /// kill count (on battery) or the pending restore count (on AC).
     private var badgeView: some View {
         let count = badgeCount
         return Group {
@@ -112,7 +154,10 @@ struct PopoverView: View {
         }
     }
 
-    // ── Computed values ──
+    // MARK: - Computed Values
+
+    /// Number of selected-and-running apps (on battery) or pending
+    /// restore apps (on AC).
     private var badgeCount: Int {
         if batteryMonitor.isOnBattery {
             return appLister.apps.filter { $0.isSelected && $0.isRunning }.count
@@ -121,6 +166,7 @@ struct PopoverView: View {
         }
     }
 
+    /// Localized power source text with battery percentage.
     private var powerText: String {
         if batteryMonitor.isOnBattery {
             return lm.translate("Battery — \(Int(batteryMonitor.batteryPercentage))%", "电池 — \(Int(batteryMonitor.batteryPercentage))%")
@@ -128,6 +174,7 @@ struct PopoverView: View {
         return lm.translate("AC Power", "交流电")
     }
 
+    /// Explains what the badge count means in the current power context.
     private var explanationText: String {
         if batteryMonitor.isOnBattery {
             return lm.translate(
@@ -142,6 +189,7 @@ struct PopoverView: View {
         }
     }
 
+    /// Summary line showing total app count and how many are running.
     private var statusInfo: String {
         let total = appLister.apps.count
         let running = appLister.apps.filter(\.isRunning).count

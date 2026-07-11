@@ -1,27 +1,64 @@
+//  ProcessKiller.swift
+//  BatKill
+//
+//  Terminates applications, launch agents, and background services when the
+//  Mac switches to battery, and restores them when AC power returns.
+//
+//  Termination strategy (by app category):
+//  - Applications: NSRunningApplication.terminate() -> .forceTerminate()
+//    -> SIGTERM -> SIGKILL -> killall (escalating force)
+//  - Launch Agents: launchctl bootout -> killall fallback
+//  - Services: direct "<name> stop" -> brew services stop -> launchctl bootout -> killall
+//  - Custom processes: SIGTERM -> SIGKILL by PID -> killall fallback
+//
+//  Restore strategy:
+//  - Applications: NSWorkspace.open() (skips if already running)
+//  - Launch Agents: launchctl bootstrap
+//  - Services: direct start -> brew services start -> launchctl bootstrap
+
 import Cocoa
 import Foundation
 import UserNotifications
 
 /// Terminates applications, launch agents, and services.
+///
+/// Manages the lifecycle of "killed on battery" apps through a persisted
+/// restore list (`killedRestorePaths` in UserDefaults). When AC power
+/// returns, `restoreKilledApps()` re-launches everything that was killed.
+///
+/// All kill/restore operations run on a background queue with UI state
+/// published on the main thread via `@Published` properties.
 final class ProcessKiller: ObservableObject {
+    /// Whether a kill operation is currently in progress.
     @Published var isKilling = false
+
+    /// Whether a restore operation is currently in progress.
     @Published var isRestoring = false
+
+    /// Results of the most recent kill operation (app name -> success).
     @Published var lastKillResults: [String: Bool] = [:]
+
+    /// Running count of successfully terminated apps (this session).
     @Published var killCount: Int = 0
+
+    /// Running count of successfully restored apps (this session).
     @Published var restoreCount: Int = 0
+
+    /// Number of apps in the persisted restore list (pending AC return).
     @Published var pendingRestoreCount: Int = 0
 
-    // ──────────────────────────────────────────────
     // MARK: - Init
-    // ──────────────────────────────────────────────
+
+    /// Initializes the kill count from the persisted restore list.
     init() {
         pendingRestoreCount = UserDefaults.standard.stringArray(forKey: "killedRestorePaths")?.count ?? 0
     }
 
-    // ──────────────────────────────────────────────
-    // MARK: - Persisted "Killed on Battery" list
-    // ──────────────────────────────────────────────
-    /// AppItem.id (path) entries that were killed by BatKill and should be restored on AC.
+    // MARK: - Persisted "Killed on Battery" List
+
+    /// Paths of apps that were killed by BatKill and should be restored
+    /// when AC power returns. Backed by UserDefaults for crash safety.
+    /// Only includes apps that were successfully terminated.
     private var killedRestorePaths: [String] {
         get { UserDefaults.standard.stringArray(forKey: "killedRestorePaths") ?? [] }
         set {
@@ -32,14 +69,18 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
+    /// Read-only access to the list of app IDs pending restore.
     var pendingRestoreAppIds: [String] { killedRestorePaths }
 
+    /// Removes a single app from the restore list (e.g., if user manually
+    /// closes it or no longer wants it auto-restored).
     func removePending(_ appId: String) {
         var paths = killedRestorePaths
         paths.removeAll { $0 == appId }
         killedRestorePaths = paths
     }
 
+    /// Restores a single pending app by its ID and posts a notification.
     func restorePendingSingle(_ appId: String, using apps: [AppItem]) {
         if let name = restoreSingleApp(appId, using: apps) {
             removePending(appId)
@@ -48,6 +89,8 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
+    /// Restores only the selected apps that are in the pending restore list.
+    /// Used by the UI's manual restore button for selective recovery.
     func restoreSelected(_ apps: [AppItem], completion: (() -> Void)? = nil) {
         let selectedPaths = Set(apps.filter { $0.isSelected }.map(\.id))
         let toRestore = killedRestorePaths.filter { selectedPaths.contains($0) }
@@ -83,9 +126,18 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
-    // ──────────────────────────────────────────────
     // MARK: - Kill (Public API)
-    // ──────────────────────────────────────────────
+
+    /// Terminates all selected and running apps, tracking them for
+    /// automatic restore when AC power returns.
+    ///
+    /// Runs on a background queue. Updates `lastKillResults`, `killCount`,
+    /// and the persisted restore list on completion.
+    ///
+    /// - Parameters:
+    ///   - apps: Full app list; only items with `isSelected && isRunning` are killed.
+    ///   - trackForRestore: Whether to add successfully killed apps to the restore list.
+    ///   - completion: Called on the main thread when the operation finishes.
     func killSelected(_ apps: [AppItem], trackForRestore: Bool = true, completion: (() -> Void)? = nil) {
         let selected = apps.filter { $0.isSelected && $0.isRunning }
         guard !selected.isEmpty else {
@@ -128,9 +180,13 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
-    // ──────────────────────────────────────────────
     // MARK: - Restore (Public API)
-    // ──────────────────────────────────────────────
+
+    /// Restores ALL apps in the persisted kill list. Called automatically
+    /// when AC power is detected, or manually by the user.
+    ///
+    /// Runs on a background thread, clears the restore list on completion,
+    /// and posts a notification with the names of restored apps.
     func restoreKilledApps(using apps: [AppItem], completion: (() -> Void)? = nil) {
         let paths = killedRestorePaths
         guard !paths.isEmpty else {
@@ -163,7 +219,15 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
-    /// Returns the app name if restore succeeded or app was already running.
+    // MARK: - Single App Restore
+
+    /// Attempts to restore a single app by its ID. Returns the display
+    /// name if restore succeeded (or app was already running), `nil` otherwise.
+    ///
+    /// Restore strategy varies by category:
+    /// - `.application`: `NSWorkspace.shared.open()` (skips if already running)
+    /// - `.launchAgent`: `launchctl bootstrap gui/<uid>/<path>`
+    /// - `.service`: direct start -> brew services start -> launchctl bootstrap
     private func restoreSingleApp(_ appId: String, using apps: [AppItem]) -> String? {
         if appId.hasSuffix(".app") {
             let url = URL(fileURLWithPath: appId)
@@ -190,6 +254,7 @@ final class ProcessKiller: ObservableObject {
         }
 
         else if let app = apps.first(where: { $0.id == appId }), app.category == .service {
+            // Strategy 1: Try direct start command
             let directStart = Process()
             directStart.executableURL = URL(fileURLWithPath: "/bin/bash")
             directStart.arguments = ["-l", "-c", "\(app.processName) start"]
@@ -200,6 +265,7 @@ final class ProcessKiller: ObservableObject {
                 if directStart.terminationStatus == 0 { return app.name }
             }
 
+            // Strategy 2: Try brew services start (for homebrew-managed services)
             if app.serviceLabel?.hasPrefix("homebrew.mxcl.") == true {
                 let task = Process()
                 task.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -211,6 +277,7 @@ final class ProcessKiller: ObservableObject {
                 if task.terminationStatus == 0 { return app.name }
             }
             
+            // Strategy 3: Try launchctl bootstrap with the service plist
             if let label = app.serviceLabel {
                 let plistPath = findPlistPath(for: label)
                 if let plistPath = plistPath {
@@ -231,9 +298,10 @@ final class ProcessKiller: ObservableObject {
         return nil
     }
 
-    // ──────────────────────────────────────────────
     // MARK: - Termination Strategies
-    // ──────────────────────────────────────────────
+
+    /// Routes termination to the appropriate strategy based on the app's
+    /// category (application, launch agent, service, or custom process).
     private func terminate(_ app: AppItem) -> Bool {
         switch app.category {
         case .application:  return killApplication(app)
@@ -243,9 +311,16 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
-    /// Force‑kill a GUI application — no AppleScript (skips confirmation dialogs).
+    /// Force-kills a GUI application using escalating strategies:
+    ///
+    /// 1. `NSRunningApplication.terminate()` (graceful, with 0.3s wait)
+    /// 2. `NSRunningApplication.forceTerminate()` (SIGKILL, with 0.3s wait)
+    /// 3. `SIGTERM` -> `SIGKILL` via `kill()` PID (0.2s between each)
+    /// 4. `killall` by process name (last resort)
+    ///
+    /// No AppleScript is used to avoid triggering confirmation dialogs.
     private func killApplication(_ app: AppItem) -> Bool {
-        // 1. NSRunningApplication
+        // Strategy 1: NSRunningApplication (graceful, then forced)
         if let bid = app.bundleIdentifier {
             let running = NSRunningApplication.runningApplications(withBundleIdentifier: bid)
             running.forEach { $0.terminate() }
@@ -256,7 +331,7 @@ final class ProcessKiller: ObservableObject {
             if NSRunningApplication.runningApplications(withBundleIdentifier: bid).isEmpty { return true }
         }
 
-        // 2. SIGTERM + SIGKILL
+        // Strategy 2: Direct signal delivery by PID
         if let pid = app.pid {
             kill(pid, SIGTERM)
             Thread.sleep(forTimeInterval: 0.2)
@@ -266,11 +341,12 @@ final class ProcessKiller: ObservableObject {
             return !isAlive(pid)
         }
 
-        // 3. killall
+        // Strategy 3: killall by process name (last resort)
         return killall(app.processName)
     }
 
-    /// Unload a user launch agent.
+    /// Unloads a user launch agent via `launchctl bootout`.
+    /// Falls back to `killProcessByName()` if the launchctl command fails.
     private func unloadLaunchAgent(_ app: AppItem) -> Bool {
         let proc = Process()
         proc.launchPath = "/bin/launchctl"
@@ -283,7 +359,8 @@ final class ProcessKiller: ObservableObject {
         return killProcessByName(app.processName)
     }
 
-    /// Kill a background process by its stored PID.
+    /// Kills a background process by its stored PID using SIGTERM/SIGKILL.
+    /// Falls back to `killProcessByName()` if no PID is available.
     private func killProcessByPid(_ app: AppItem) -> Bool {
         guard let pid = app.pid else { return killProcessByName(app.processName) }
         kill(pid, SIGTERM); Thread.sleep(forTimeInterval: 0.3)
@@ -292,7 +369,8 @@ final class ProcessKiller: ObservableObject {
         return !isAlive(pid)
     }
 
-    /// Kill all processes matching the given name.
+    /// Kills all processes matching the given name using `/usr/bin/killall`.
+    /// Best-effort: returns `true` if the command ran, regardless of result.
     private func killProcessByName(_ name: String) -> Bool {
         let proc = Process()
         proc.launchPath = "/usr/bin/killall"
@@ -304,11 +382,19 @@ final class ProcessKiller: ObservableObject {
         return true // best effort
     }
 
+    /// Convenience wrapper around `killProcessByName()`.
     private func killall(_ name: String) -> Bool {
         killProcessByName(name)
     }
 
+    /// Stops a background service using a three-tier strategy:
+    ///
+    /// 1. Direct `<processName> stop` (works for services with their own CLI)
+    /// 2. `brew services stop <processName>` (for Homebrew-managed services)
+    /// 3. `launchctl bootout gui/<uid>/<label>` (for launchd-registered services)
+    /// 4. `killall` as a final fallback after a 1-second grace period
     private func stopService(_ app: AppItem) -> Bool {
+        // Strategy 1: Direct service stop command
         let directStop = Process()
         directStop.executableURL = URL(fileURLWithPath: "/bin/bash")
         directStop.arguments = ["-l", "-c", "\(app.processName) stop"]
@@ -319,6 +405,7 @@ final class ProcessKiller: ObservableObject {
             if directStop.terminationStatus == 0 { return true }
         }
 
+        // Strategy 2: Homebrew services stop
         let brewStop = Process()
         brewStop.executableURL = URL(fileURLWithPath: "/bin/bash")
         brewStop.arguments = ["-l", "-c", "brew services stop \(app.processName)"]
@@ -329,6 +416,7 @@ final class ProcessKiller: ObservableObject {
             if brewStop.terminationStatus == 0 { return true }
         }
         
+        // Strategy 3: launchctl bootout
         if let label = app.serviceLabel {
             let target = "gui/\(getuid())/\(label)"
             let proc = Process()
@@ -339,10 +427,13 @@ final class ProcessKiller: ObservableObject {
             if (try? proc.run()) != nil { proc.waitUntilExit() }
         }
         
+        // Give the process time to exit, then force-kill by name
         Thread.sleep(forTimeInterval: 1)
         return killProcessByName(app.processName)
     }
 
+    /// Searches ~/Library/LaunchAgents/ for a plist file whose "Label"
+    /// key matches the given launchd label. Returns the full path if found.
     private func findPlistPath(for label: String) -> String? {
         let userAgentsDir = NSHomeDirectory() + "/Library/LaunchAgents"
         let fm = FileManager.default
@@ -361,22 +452,25 @@ final class ProcessKiller: ObservableObject {
         return nil
     }
 
-    // ──────────────────────────────────────────────
     // MARK: - Utilities
-    // ──────────────────────────────────────────────
+
+    /// Checks whether a process with the given PID is still alive
+    /// by sending signal 0 (no signal, just permission check).
     private func isAlive(_ pid: Int32) -> Bool {
         return kill(pid, 0) == 0 || errno != ESRCH
     }
 
+    /// Escapes special characters in a string for safe embedding in AppleScript.
     private func escapeAppleScript(_ str: String) -> String {
         str.replacingOccurrences(of: "\\", with: "\\\\")
            .replacingOccurrences(of: "\"", with: "\\\"")
            .replacingOccurrences(of: "\n", with: "\\n")
     }
 
-    // ──────────────────────────────────────────────
     // MARK: - Notifications
-    // ──────────────────────────────────────────────
+
+    /// Posts a user notification summarizing which apps were killed
+    /// and which failed. Requests notification authorization if needed.
     private func postKillNotification(results: [String: Bool]) {
         let killed = results.filter { $0.value }.map { $0.key }
         let failed = results.filter { !$0.value }.map { $0.key }
@@ -405,6 +499,8 @@ final class ProcessKiller: ObservableObject {
         ))
     }
 
+    /// Posts a user notification listing the names of apps restored
+    /// when AC power was detected.
     private func postRestoreNotification(names: [String]) {
         guard !names.isEmpty else { return }
         let center = UNUserNotificationCenter.current()

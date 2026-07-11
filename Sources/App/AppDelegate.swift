@@ -1,76 +1,107 @@
+//  AppDelegate.swift
+//  BatKill
+//
+//  Central coordinator for the entire application. Owns every subsystem
+//  (BatteryMonitor, AppLister, ProcessKiller, HardwareMonitor, etc.) and
+//  glues them together.
+//
+//  Responsibilities:
+//    - Single-instance enforcement on launch
+//    - Menu-bar setup via MenuBarManager
+//    - Window lifecycle (settings, temperature)
+//    - Power-action queue with debounce and cooldown
+//    - Badge rendering driven by Combine subscriptions
+//
+//  Architecture notes:
+//    The power-action queue uses `pendingPowerAction: Bool?` to encode three
+//    states: nil = nothing pending, true = battery action (kill), false = AC
+//    action (restore). Rapid power-source transitions (fast plug/unplug) are
+//    coalesced by simply overwriting `pendingPowerAction` -- only the final
+//    state ever executes. After each completed action a 30-second cooldown
+//    timer prevents thrashing.
+
 import SwiftUI
-import ServiceManagement
+import AppKit
 import Combine
-
-// MARK: - App Entry Point
-@main
-struct BatKillApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-
-    var body: some Scene {
-        WindowGroup(id: "settings") {
-            ContentView()
-                .environmentObject(appDelegate.batteryMonitor)
-                .environmentObject(appDelegate.appLister)
-                .environmentObject(appDelegate.processKiller)
-                .environmentObject(appDelegate.localizationManager)
-                .environmentObject(appDelegate.versionChecker)
-                .environmentObject(appDelegate.updater)
-                .environmentObject(appDelegate.hardwareMonitor)
-        }
-        .windowResizability(.contentSize)
-        .commands { CommandGroup(replacing: .newItem) { } }
-    }
-}
-
-// MARK: - CLI Fan Write (admin re-launch)
-private func handleCLIArgs() -> Bool {
-    let args = CommandLine.arguments
-    guard args.count >= 2 else { return false }
-
-    if args[1] == "--set-fan", args.count == 4 {
-        guard let fanIndex = Int(args[2]), let speed = Double(args[3]) else { return false }
-        let monitor = HardwareMonitor()
-        monitor.setFanMode(fanIndex: fanIndex, auto: false)
-        _ = monitor.setFanSpeed(fanIndex: fanIndex, speed: speed)
-        exit(monitor.lastFanWriteOK ? 0 : 1)
-    }
-
-    if args[1] == "--set-fan-mode", args.count == 4 {
-        guard let fanIndex = Int(args[2]), let mode = Int(args[3]) else { return false }
-        let monitor = HardwareMonitor()
-        _ = monitor.setFanMode(fanIndex: fanIndex, auto: mode == 0)
-        exit(monitor.lastFanWriteOK ? 0 : 1)
-    }
-
-    return false
-}
+import ServiceManagement
 
 // MARK: - App Delegate
+
+/// The NSApplicationDelegate that owns every subsystem and orchestrates
+/// power-state transitions, window management, and badge updates.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    // MARK: - Subsystem References
+
+    /// Monitors AC/battery power state via IOKit.
     let batteryMonitor      = BatteryMonitor()
+    /// Discovers installed applications, launch agents, and background services.
     let appLister           = AppLister()
+    /// Handles process termination and restoration with persistence.
     let processKiller       = ProcessKiller()
+    /// Shared localization manager for English/Chinese translations.
     let localizationManager = LocalizationManager.shared
+    /// Checks GitHub for new releases.
     let versionChecker      = VersionChecker()
+    /// Downloads and installs updates (depends on versionChecker).
     lazy var updater        = Updater(checker: versionChecker)
+    /// Reads CPU temperatures and fan speeds via SMC.
     let hardwareMonitor     = HardwareMonitor()
 
+    // MARK: - UI References
+
+    /// Manages the NSStatusItem (menu-bar icon, badge, popover, context menu).
     private var menuBarManager: MenuBarManager?
+
+    /// Tracks whether the first app-list load has completed and the badge
+    /// has been shown at least once.
     private var hasAppeared      = false
+
+    /// Reference to the settings window so we can avoid creating duplicates.
     private var settingsWindow: NSWindow?
+
+    /// Reference to the temperature/hardware-monitor window.
     private var temperatureWindow: NSWindow?
+
+    /// Combine subscriptions for power state, app list, and restore count.
     private var cancellables     = Set<AnyCancellable>()
 
-    // ── Power‑action queue ──
-    private var pendingPowerAction: Bool?     // nil=none, true=battery(kill), false=AC(restore)
+    // MARK: - Power-Action Queue
+
+    /// Coalesced power action waiting to be processed.
+    /// - `nil`: no action pending
+    /// - `true`: battery -- kill selected apps
+    /// - `false`: AC power -- restore killed apps
+    ///
+    /// When the user rapidly plugs/unplugs power, successive calls to
+    /// `queuePowerAction(isOnBattery:)` simply overwrite this value.
+    /// Only the **final** state is ever acted upon.
+    private var pendingPowerAction: Bool?
+
+    /// True while a kill or restore operation is in flight. Prevents
+    /// overlapping operations from racing.
     private var powerActionInProgress = false
+
+    /// Timer for the post-action cooldown period. During this window,
+    /// `processNextPowerAction()` is blocked even if a new action is pending.
     private var powerDelayTimer: Timer?
+
+    /// Seconds to wait after completing a power action before allowing
+    /// the next queued action to proceed. Prevents rapid thrashing when
+    /// the power source flickers.
     private let powerActionDelaySeconds: TimeInterval = 30
+
+    // MARK: - Auto-Kill Preference
+
+    /// Convenience accessor for the `autoKillEnabled` user default.
+    private var autoKillEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "autoKillEnabled")
+    }
 
     // ──────────────────────────────────────────────
     // MARK: - Single Instance
     // ──────────────────────────────────────────────
+
     /// Checks if another instance of BatKill is already running.
     /// If so, activates the existing instance and terminates this one.
     /// Returns true when the current instance should stop launching.
@@ -95,12 +126,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // ──────────────────────────────────────────────
     // MARK: - Launch
     // ──────────────────────────────────────────────
+
+    /// Called once after the app finishes launching. Handles CLI fan-write
+    /// arguments (admin re-launch), enforces single instance, sets up the
+    /// menu bar, refreshes the app list, checks for updates, and begins
+    /// observing state changes for badge updates and power actions.
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // If this is an admin re-launch for fan writing, handle the CLI
+        // arguments and exit immediately -- no UI setup needed.
         if handleCLIArgs() { return }
 
+        // Prevent duplicate instances.
         if enforceSingleInstance() { return }
 
-        // 1. Menu bar
+        // 1. Create and configure the menu bar icon + popover.
         let mgr = MenuBarManager()
         menuBarManager = mgr
         let pv = PopoverView(
@@ -108,13 +147,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             processKiller: processKiller, lm: localizationManager)
         mgr.setPopoverContent(pv)
 
-        // 2. Start
+        // 2. Begin scanning installed applications.
         appLister.refreshAppList()
 
-        // 3. Check for updates
+        // 3. Check GitHub for a new release in the background.
         versionChecker.checkForUpdate()
 
-        // 4. Listen for window requests
+        // 4. Listen for window-open requests via NotificationCenter.
         NotificationCenter.default.addObserver(
             self, selector: #selector(showSettingsWindow),
             name: .showSettings, object: nil)
@@ -122,10 +161,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(showTemperatureWindow),
             name: .showTemperature, object: nil)
 
-        // 4. Badge & state
+        // 5. Subscribe to state changes for badge and power actions.
         observeStateChanges()
     }
 
+    // ──────────────────────────────────────────────
+    // MARK: - Window Management
+    // ──────────────────────────────────────────────
+
+    /// Opens (or focuses) the Settings window. If the window already exists
+    /// and is visible, it is brought to the front. Otherwise a new window
+    /// is created hosting a SwiftUI ContentView with all environment objects.
     @objc func showSettingsWindow() {
         logger("showSettingsWindow: called, settingsWindow=\(settingsWindow != nil), isVisible=\(settingsWindow?.isVisible ?? false)")
 
@@ -138,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.close()
         settingsWindow = nil
 
-        let contentView = ContentView()
+        let contentView = SettingsView()
             .environmentObject(batteryMonitor)
             .environmentObject(appLister)
             .environmentObject(processKiller)
@@ -150,15 +196,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingController = NSHostingController(rootView: contentView)
         let window = NSWindow(contentViewController: hostingController)
         window.title = "BatKill"
-        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.styleMask = NSWindow.StyleMask([.titled, .closable, .miniaturizable])
         window.isReleasedWhenClosed = false
         window.setContentSize(NSSize(width: 500, height: 640))
         window.center()
-        window.makeKeyAndOrderFront(nil)
+        window.makeKeyAndOrderFront(nil as NSWindow?)
+        settingsWindow = window
         settingsWindow = window
         activateApp()
     }
 
+    /// Opens (or focuses) the Temperature / Hardware Monitor window.
     @objc func showTemperatureWindow() {
         if let win = temperatureWindow, win.isVisible {
             win.makeKeyAndOrderFront(nil)
@@ -185,6 +233,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activateApp()
     }
 
+    /// Brings the application to the foreground, activating it so its
+    /// windows become key. Uses the macOS 14+ API when available.
     private func activateApp() {
         if #available(macOS 14.0, *) {
             NSApp.activate()
@@ -194,9 +244,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // ──────────────────────────────────────────────
-    // MARK: - Badge & state
+    // MARK: - Badge & State Observation
     // ──────────────────────────────────────────────
+
+    /// Sets up Combine subscriptions that drive badge updates and trigger
+    /// power actions when the battery state or app list changes.
     private func observeStateChanges() {
+        // When battery state changes, refresh the badge and enqueue a kill/restore.
         batteryMonitor.$isOnBattery
             .sink { [weak self] newValue in
                 guard let self = self, appLister.hasLoaded else { return }
@@ -204,12 +258,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.queuePowerAction(isOnBattery: newValue)
             }
             .store(in: &cancellables)
+
+        // When the app list changes, refresh the badge (count may change).
         appLister.$apps
             .sink { [weak self] _ in self?.refreshBadge() }
             .store(in: &cancellables)
+
+        // When pending restore count changes, refresh the badge.
         processKiller.$pendingRestoreCount
             .sink { [weak self] _ in self?.refreshBadge() }
             .store(in: &cancellables)
+
+        // On first successful app-list load, show the badge and trigger
+        // the initial power action if the machine is already on battery.
         appLister.$hasLoaded
             .sink { [weak self] loaded in
                 guard loaded, let self = self, !self.hasAppeared else { return }
@@ -220,6 +281,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
+    /// Updates the menu-bar badge count. On battery, shows the number of
+    /// selected-and-running apps. On AC power, shows the pending restore count.
     private func refreshBadge() {
         guard appLister.hasLoaded else { return }
         let count = batteryMonitor.isOnBattery
@@ -229,19 +292,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // ──────────────────────────────────────────────
-    // MARK: - Power‑action queue
+    // MARK: - Power-Action Queue
     // ──────────────────────────────────────────────
-    private var autoKillEnabled: Bool { UserDefaults.standard.bool(forKey: "autoKillEnabled") }
 
-    /// Enqueue a power‑state transition.
-    /// Rapid successive calls coalesce — only the **latest** state is retained.
+    /// Enqueue a power-state transition.
+    ///
+    /// Rapid successive calls coalesce -- only the **latest** state is
+    /// retained in `pendingPowerAction`. If no operation is in progress
+    /// and no cooldown timer is active, the action executes immediately.
     private func queuePowerAction(isOnBattery: Bool) {
         logger("queuePowerAction: isOnBattery=\(isOnBattery) inProgress=\(powerActionInProgress) hasTimer=\(powerDelayTimer != nil) hadPending=\(pendingPowerAction != nil)")
         pendingPowerAction = isOnBattery
         processNextPowerAction()
     }
 
-    /// Process the next queued action when idle and not in delay period.
+    /// Process the next queued action when idle and not in cooldown.
+    ///
+    /// Guard conditions:
+    ///   1. No kill/restore operation is in flight (`powerActionInProgress`)
+    ///   2. No cooldown timer is active (`powerDelayTimer == nil`)
+    ///   3. There is actually a pending action (`pendingPowerAction != nil`)
     private func processNextPowerAction() {
         guard !powerActionInProgress, powerDelayTimer == nil, let onBattery = pendingPowerAction else {
             return
@@ -252,15 +322,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger("processNextPowerAction: executing for isOnBattery=\(onBattery)")
 
         if onBattery {
+            // Battery mode: kill selected running apps (if auto-kill is enabled)
             if autoKillEnabled {
                 processKiller.killSelected(appLister.apps) { [weak self] in
                     self?.appLister.refreshAppList()
                     self?.onPowerActionCompleted()
                 }
             } else {
+                // Auto-kill disabled, skip directly to cooldown
                 onPowerActionCompleted()
             }
         } else {
+            // AC mode: restore previously killed apps
             processKiller.restoreKilledApps(using: appLister.apps) { [weak self] in
                 self?.appLister.refreshAppList()
                 self?.onPowerActionCompleted()
@@ -268,13 +341,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Called on main thread when the current kill/restore finishes or is skipped.
+    /// Called on the main thread when the current kill/restore finishes
+    /// or is skipped. Starts the cooldown timer before allowing the next
+    /// queued action to proceed. If a new power transition arrived during
+    /// the operation, it will be processed after the cooldown expires.
     private func onPowerActionCompleted() {
         powerActionInProgress = false
         logger("onPowerActionCompleted: pending=\(pendingPowerAction != nil), starting \(powerActionDelaySeconds)s delay")
 
         guard let onBattery = pendingPowerAction else { return }
 
+        // Show a brief tooltip notification under the menu-bar icon
+        // telling the user what will happen after the cooldown.
         let msg: String
         if onBattery {
             msg = localizationManager.translate(
@@ -287,6 +365,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menuBarManager?.showBriefNotification(msg)
 
+        // Start the cooldown timer. When it fires, processNextPowerAction()
+        // will pick up any action that arrived during the cooldown.
         powerDelayTimer = Timer.scheduledTimer(withTimeInterval: powerActionDelaySeconds, repeats: false) { [weak self] _ in
             guard let self = self else { return }
             self.powerDelayTimer = nil

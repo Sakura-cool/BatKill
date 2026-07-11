@@ -1,40 +1,110 @@
+//  TemperatureView.swift
+//  BatKill
+//
+//  Full hardware monitoring window displaying CPU temperatures by sensor
+//  group, fan speeds with manual/auto control, fan presets, and the
+//  temperature threshold that triggers automatic release of fan control
+//  to the system.
+//
+//  Opened via the .showTemperature notification from the settings header
+//  or the popover. Hosted in a standalone NSWindow by AppDelegate.
+//
+//  Layout structure (top to bottom):
+//    1. Header            -- thermometer icon, title, sensor/fan count, refresh button
+//    2. Unavailable View  -- shown when SMC access fails (missing disk permission)
+//    3. Thermal Warning   -- red banner when CPU exceeds the temperature threshold
+//    4. Threshold Section -- configurable temperature threshold with stepper
+//    5. Temperature Groups -- collapsible P-Core / E-Core / other sensor groups
+//    6. Preset Section    -- save/load/delete fan presets
+//    7. Fan Control       -- per-fan auto/manual toggle, speed slider, admin auth
+//
+//  All hardware reads go through HardwareMonitor (SMC). Fan writes require
+//  admin privileges, obtained via AuthorizationServices.
+
 import SwiftUI
 
 // MARK: - Temperature & Fan Control View
+
+/// Full-featured hardware monitoring window. Shows CPU temperatures
+/// organized by sensor group, fan controls with admin-privileged writes,
+/// and a configurable temperature threshold for automatic safety override.
 struct TemperatureView: View {
+
+    // MARK: - Observed Objects
+
+    /// Provides live temperature readings, fan info, and SMC write access.
     @ObservedObject var hardwareMonitor: HardwareMonitor
+
+    /// Localization manager for English/Chinese translations.
     @ObservedObject var lm: LocalizationManager
+
+    // MARK: - State Objects
+
+    /// Persistent store for user-defined fan presets (UserDefaults-backed).
     @StateObject private var presetStore = FanPresetStore()
-    @State private var fanManualModes: [Int: Bool] = [:]
-    @State private var fanPendingSpeeds: [Int: Double] = [:]
-    @State private var expandedCategories: Set<TemperatureCategory> = []
-    @State private var fanWriteStatus: [Int: String] = [:]
-    @State private var fanNeedsAdmin: [Int: Bool] = [:]
-    @State private var refreshTimer: Timer?
-    @State private var showingSaveAlert = false
-    @State private var newPresetName = ""
-    @State private var deleteTarget: FanPreset?
+
+    /// Persistent store for the temperature threshold setting.
     @StateObject private var thresholdStore = TemperatureThresholdStore()
+
+    // MARK: - Local UI State
+
+    /// Per-fan manual mode flags: true = manual, false = auto.
+    @State private var fanManualModes: [Int: Bool] = [:]
+
+    /// Per-fan pending speed values (pending until the user taps "Set Speed").
+    @State private var fanPendingSpeeds: [Int: Double] = [:]
+
+    /// Set of expanded temperature category groups in the accordion.
+    @State private var expandedCategories: Set<TemperatureCategory> = []
+
+    /// Per-fan write status messages ("Set (Admin)", "Failed", etc.).
+    @State private var fanWriteStatus: [Int: String] = [:]
+
+    /// Per-fan flags indicating admin authorization is needed before writing.
+    @State private var fanNeedsAdmin: [Int: Bool] = [:]
+
+    /// Timer that refreshes sensor data every second.
+    @State private var refreshTimer: Timer?
+
+    /// Controls the "Save Preset" alert.
+    @State private var showingSaveAlert = false
+
+    /// User-entered name for a new preset.
+    @State private var newPresetName = ""
+
+    /// The preset targeted for deletion (shows confirmation alert).
+    @State private var deleteTarget: FanPreset?
+
+    /// String representation of the threshold for the text field.
     @State private var thresholdInput: String = ""
+
+    // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
+            // Header with title and refresh button
             header
                 .padding()
                 .background(Color(NSColor.windowBackgroundColor))
             Divider()
 
             if !hardwareMonitor.isAvailable {
+                // SMC access denied or unavailable
                 unavailableView
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
+                        // Red warning banner when overheating
                         if hardwareMonitor.thermalThrottled {
                             thermalWarningBanner
                         }
+                        // Temperature threshold configuration
                         thresholdSection
+                        // Collapsible temperature sensor groups
                         temperatureGroups
+                        // Fan preset management
                         presetSection
+                        // Per-fan speed controls
                         fanSection
                     }
                     .padding()
@@ -43,11 +113,17 @@ struct TemperatureView: View {
         }
         .frame(width: 480, height: 600)
         .onAppear {
+            // Initialize threshold input field
             thresholdInput = "\(Int(thresholdStore.threshold))"
+            // Fetch initial sensor data
             hardwareMonitor.refresh()
+            // Ensure the built-in "Auto Mode" preset exists
             presetStore.ensureAutoPreset(fanCount: hardwareMonitor.fans.count)
+            // Initialize fan UI state from current hardware values
             initFanStates()
+            // Apply the currently active preset
             applyPreset(presetStore.activePreset)
+            // Set up thermal throttle callback to auto-release fans
             hardwareMonitor.onThermalThrottle = {
                 guard hardwareMonitor.isAdminAuthorized else { return }
                 var speeds: [Int: Double] = [:]
@@ -60,6 +136,7 @@ struct TemperatureView: View {
                 presetStore.update(auto)
                 executePreset(auto)
             }
+            // Start a 1-second refresh timer for live sensor data
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
                 hardwareMonitor.refresh()
                 hardwareMonitor.checkThreshold(thresholdStore.threshold)
@@ -73,6 +150,8 @@ struct TemperatureView: View {
 
     // MARK: - Header
 
+    /// Top bar with thermometer icon, title ("Hardware Monitor"), sensor/fan
+    /// count summary, and a manual refresh button.
     private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "thermometer.medium")
@@ -100,6 +179,7 @@ struct TemperatureView: View {
         }
     }
 
+    /// Summary of detected sensors and fans.
     private var statusText: String {
         let tempCount = hardwareMonitor.temperatures.count
         let fanCount = hardwareMonitor.fans.count
@@ -111,6 +191,8 @@ struct TemperatureView: View {
 
     // MARK: - Unavailable
 
+    /// Shown when SMC is inaccessible. Instructs the user to grant
+    /// Full Disk Access permission to BatKill.
     private var unavailableView: some View {
         VStack(spacing: 12) {
             Spacer()
@@ -130,6 +212,8 @@ struct TemperatureView: View {
 
     // MARK: - Thermal Warning
 
+    /// Red banner displayed when CPU temperature exceeds the configured
+    /// threshold. Explains that fan control has been released to the system.
     private var thermalWarningBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -157,6 +241,9 @@ struct TemperatureView: View {
 
     // MARK: - Threshold Section
 
+    /// Configurable temperature threshold with a stepper and direct input.
+    /// When CPU exceeds this value, fan control is automatically released
+    /// to the system for safety.
     private var thresholdSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -179,6 +266,7 @@ struct TemperatureView: View {
                 Text(lm.translate("Threshold:", "阈值:"))
                     .font(.caption)
 
+                // Stepper with clamped range 60-120 degrees
                 Stepper(
                     value: Binding(
                         get: { thresholdStore.threshold },
@@ -192,6 +280,7 @@ struct TemperatureView: View {
                     step: 1
                 ) {
                     HStack(spacing: 2) {
+                        // Direct text input for the threshold value
                         TextField("60-120", text: $thresholdInput)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.caption, design: .monospaced))
@@ -213,12 +302,14 @@ struct TemperatureView: View {
 
                 Spacer()
 
+                // Overheat danger warning
                 if hardwareMonitor.thermalThrottled {
-                    Text(lm.translate("⚠️ Overheat Danger!", "⚠️ 过温危险!"))
+                    Text(lm.translate("Overheat Danger!", "过温危险!"))
                         .font(.caption).fontWeight(.bold)
                         .foregroundColor(.red)
                 }
 
+                // Live CPU average temperature indicator
                 let cpuTemp = hardwareMonitor.maxCPUTemp
                 HStack(spacing: 4) {
                     Text(lm.translate("CPU avg:", "CPU平均:"))
@@ -240,6 +331,9 @@ struct TemperatureView: View {
 
     // MARK: - Temperature Groups
 
+    /// Collapsible accordion of temperature sensor groups (P-Core, E-Core,
+    /// Battery, etc.). Each group shows an average temperature and can be
+    /// expanded to reveal individual sensor readings.
     private var temperatureGroups: some View {
         VStack(alignment: .leading, spacing: 0) {
             let groups = hardwareMonitor.groupedTemperatures
@@ -258,6 +352,7 @@ struct TemperatureView: View {
         .cornerRadius(8)
     }
 
+    /// Empty-state view when no temperature sensors are detected.
     private var emptyTempView: some View {
         HStack {
             Spacer()
@@ -269,6 +364,7 @@ struct TemperatureView: View {
         }
     }
 
+    /// Renders a single temperature group row with expand/collapse toggle.
     private func temperatureGroupRow(_ group: TemperatureGroup) -> some View {
         let isExpanded = expandedCategories.contains(group.category)
 
@@ -316,6 +412,7 @@ struct TemperatureView: View {
             }
             .buttonStyle(.plain)
 
+            // Expanded sensor detail rows
             if isExpanded {
                 VStack(spacing: 0) {
                     ForEach(group.sensors) { sensor in
@@ -326,6 +423,7 @@ struct TemperatureView: View {
         }
     }
 
+    /// A single sensor row with name, progress bar, temperature, and color dot.
     @ViewBuilder
     private func sensorRow(_ sensor: TemperatureSensor, isLast: Bool) -> some View {
         HStack(spacing: 8) {
@@ -357,6 +455,9 @@ struct TemperatureView: View {
 
     // MARK: - Preset Section
 
+    /// Fan preset management section. Lists saved presets with apply/delete
+    /// actions, and provides a "Save Current" button to capture the current
+    /// fan speeds into a new named preset.
     private var presetSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -369,6 +470,7 @@ struct TemperatureView: View {
             }
 
             if presetStore.presets.isEmpty {
+                // No presets yet -- show save button
                 HStack {
                     Text(lm.translate("No presets saved", "暂无预设"))
                         .font(.caption)
@@ -384,8 +486,10 @@ struct TemperatureView: View {
                 }
                 .padding(.vertical, 4)
             } else {
+                // List of saved presets
                 ForEach(presetStore.presets) { preset in
                     HStack(spacing: 8) {
+                        // Preset selection button (radio-style)
                         Button {
                             applyPreset(preset)
                         } label: {
@@ -406,6 +510,7 @@ struct TemperatureView: View {
                         }
                         .buttonStyle(.plain)
 
+                        // Fan speed summary for this preset
                         let desc = preset.fanSpeeds.keys.sorted().map { idx in
                             if preset.fanAutoModes[idx] == true {
                                 return lm.translate("Auto", "自动")
@@ -418,6 +523,7 @@ struct TemperatureView: View {
 
                         Spacer()
 
+                        // Apply button
                         Button {
                             applyPreset(preset)
                         } label: {
@@ -426,6 +532,7 @@ struct TemperatureView: View {
                         }
                         .buttonStyle(.plain)
 
+                        // Delete button (not shown for built-in presets)
                         if !preset.isBuiltIn {
                             Button {
                                 deleteTarget = preset
@@ -443,6 +550,7 @@ struct TemperatureView: View {
                     }
                 }
 
+                // Save Current button at the bottom
                 HStack {
                     Spacer()
                     Button {
@@ -458,6 +566,7 @@ struct TemperatureView: View {
         .padding(12)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
+        // Save Preset alert -- prompts for a name
         .alert(lm.translate("Save Preset", "保存预设"), isPresented: $showingSaveAlert) {
             TextField(lm.translate("Preset name", "预设名称"), text: $newPresetName)
             Button(lm.translate("Save", "保存")) {
@@ -475,6 +584,7 @@ struct TemperatureView: View {
             }.joined(separator: "\n")
             Text(info + "\n\n" + lm.translate("Enter a name for this preset", "为此预设输入名称"))
         }
+        // Delete Preset confirmation alert
         .alert(lm.translate("Delete Preset", "删除预设"), isPresented: Binding(
             get: { deleteTarget != nil },
             set: { if !$0 { deleteTarget = nil } }
@@ -491,6 +601,9 @@ struct TemperatureView: View {
 
     // MARK: - Fan Section
 
+    /// Per-fan control section. Each fan gets an auto/manual segmented
+    /// picker, a speed slider (when in manual mode), and a "Set Speed"
+    /// button that writes to the SMC (requiring admin authorization).
     private var fanSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -521,31 +634,38 @@ struct TemperatureView: View {
         .cornerRadius(8)
     }
 
+    /// A single fan's control row with auto/manual picker, speed slider,
+    /// set button, and admin authorization flow.
     private func fanControlRow(_ fan: FanInfo) -> some View {
         let isManual = fanManualModes[fan.index] ?? false
         let pendingSpeed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
+                // Fan name
                 Text(fan.name)
                     .font(.caption).fontWeight(.medium)
                     .frame(width: 80, alignment: .leading)
 
+                // Current speed readout
                 Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.secondary)
 
                 Spacer()
 
+                // Auto / Manual segmented picker
                 Picker("", selection: Binding(
                     get: { isManual },
                     set: { newValue in
+                        // Block manual mode if thermally throttled
                         if newValue && hardwareMonitor.thermalThrottled { return }
                         fanManualModes[fan.index] = newValue
                         fanWriteStatus[fan.index] = nil
                         fanNeedsAdmin[fan.index] = nil
 
                         if newValue {
+                            // Switching to manual: initialize pending speed
                             fanPendingSpeeds[fan.index] = fan.currentSpeed
                             hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
                                 fanWriteStatus[fan.index] = ok
@@ -553,6 +673,7 @@ struct TemperatureView: View {
                                     : lm.translate("Failed", "失败")
                             }
                         } else {
+                            // Switching to auto: restore system control
                             hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { ok in
                                 fanWriteStatus[fan.index] = ok
                                     ? lm.translate("Auto mode restored", "已恢复自动")
@@ -568,7 +689,9 @@ struct TemperatureView: View {
                 .frame(width: 120)
             }
 
+            // Manual mode controls (hidden when auto or thermally throttled)
             if isManual && !hardwareMonitor.thermalThrottled {
+                // Speed slider with +/- buttons
                 HStack(spacing: 8) {
                     Image(systemName: "minus")
                         .font(.caption2)
@@ -580,6 +703,7 @@ struct TemperatureView: View {
                             set: { fanPendingSpeeds[fan.index] = $0 }
                         ),
                         in: 0...fan.maxSpeed,
+                        // Coarse steps below 1200 RPM, fine steps above
                         step: pendingSpeed <= 1200 ? 100 : 1
                     )
 
@@ -587,11 +711,13 @@ struct TemperatureView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
 
+                    // Numeric readout of pending speed
                     Text(String(format: "%d", Int(pendingSpeed)))
                         .font(.system(.caption, design: .monospaced))
                         .frame(width: 50, alignment: .trailing)
                 }
 
+                // Min/Max speed labels
                 HStack {
                     Text(String(format: "Min: %d", Int(fan.minSpeed)))
                         .font(.caption2)
@@ -602,16 +728,19 @@ struct TemperatureView: View {
                         .foregroundColor(.secondary)
                 }
 
+                // Action buttons: Set Speed, Authorize Admin, status message
                 HStack(spacing: 8) {
                     Button {
                         let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
                         if hardwareMonitor.isAdminAuthorized {
+                            // Already authorized -- write speed directly
                             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
                                 fanWriteStatus[fan.index] = ok
                                     ? lm.translate("Set (Admin)", "已设定(管理员)")
                                     : lm.translate("Failed", "失败")
                             }
                         } else {
+                            // Need admin -- show authorize button
                             fanNeedsAdmin[fan.index] = true
                         }
                     } label: {
@@ -621,6 +750,7 @@ struct TemperatureView: View {
                     .controlSize(.small)
                     .tint(.blue)
 
+                    // Admin authorization button (shown after first failed attempt)
                     if fanNeedsAdmin[fan.index] == true {
                         Button {
                             if hardwareMonitor.requestAdminAuth() {
@@ -642,6 +772,7 @@ struct TemperatureView: View {
                         .tint(.orange)
                     }
 
+                    // Status message after write attempt
                     if let status = fanWriteStatus[fan.index] {
                         Text(status)
                             .font(.caption2)
@@ -658,6 +789,8 @@ struct TemperatureView: View {
 
     // MARK: - Helpers
 
+    /// Initializes fan UI state (manual modes and pending speeds) from
+    /// current hardware values. Called on appear and on manual refresh.
     private func initFanStates() {
         for fan in hardwareMonitor.fans {
             if fanManualModes[fan.index] == nil {
@@ -669,6 +802,8 @@ struct TemperatureView: View {
         }
     }
 
+    /// Applies a fan preset. If the preset requires manual fan modes and
+    /// admin is not yet authorized, requests authorization first.
     private func applyPreset(_ preset: FanPreset?) {
         guard let preset = preset else { return }
 
@@ -682,9 +817,12 @@ struct TemperatureView: View {
         }
     }
 
+    /// Writes all fan speeds and modes from the given preset to hardware.
+    /// Activates the preset in the store so it is remembered.
     private func executePreset(_ preset: FanPreset) {
         presetStore.activate(preset)
 
+        // Apply auto/manual modes
         for (index, isAuto) in preset.fanAutoModes {
             fanManualModes[index] = !isAuto
             if isAuto {
@@ -693,6 +831,7 @@ struct TemperatureView: View {
             }
         }
 
+        // Apply speeds for manual-mode fans
         for (index, speed) in preset.fanSpeeds {
             fanPendingSpeeds[index] = speed
             if preset.fanAutoModes[index] != true {
@@ -705,6 +844,8 @@ struct TemperatureView: View {
         }
     }
 
+    /// Captures the current fan speeds and modes into a new preset with
+    /// the user-entered name, saves it to the store, and activates it.
     private func saveCurrentAsPreset() {
         var speeds: [Int: Double] = [:]
         var autoModes: [Int: Bool] = [:]
@@ -718,10 +859,14 @@ struct TemperatureView: View {
         newPresetName = ""
     }
 
+    /// Normalizes a temperature value to a 0-1 range for the progress bar.
+    /// Uses a range of -20 to 100 degrees C.
     private func normalizedTemp(_ temp: Double) -> Double {
         min(max((temp + 20) / 120.0, 0), 1.0)
     }
 
+    /// Returns a color indicating the severity of a temperature reading.
+    /// Green (< 50), Orange (50-70), Red (>= 70).
     private func tempColor(_ temp: Double) -> Color {
         if temp < 50 { return .green }
         if temp < 70 { return .orange }
