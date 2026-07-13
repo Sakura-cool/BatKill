@@ -1,7 +1,7 @@
 # BatKill — 项目知识库
 
-**更新日期:** 2026-07-11
-**版本:** v0.0.15
+**更新日期:** 2026-07-12
+**版本:** v0.0.16
 **技术栈:** Swift 5 / SwiftUI / AppKit / IOKit / Combine / AuthorizationServices
 **目标系统:** macOS 14.0+ (arm64 + x86_64)
 **Bundle ID:** com.batkill.app
@@ -65,6 +65,20 @@ BatKill/
 │   │   └── TemperatureView.swift      # 温度监控窗口
 │   └── UI/                         # 系统级 UI
 │       └── MenuBarManager.swift       # NSStatusItem、角标渲染、右键菜单、通知面板
+├── Tests/                          # 单元测试
+│   ├── Sources/
+│   │   ├── TestMain.swift              # 测试入口点
+│   │   ├── Core/
+│   │   │   ├── TestFramework.swift     # 轻量级测试框架
+│   │   │   └── ExtensionsTests.swift  # Binding.onChange 测试
+│   │   ├── Models/
+│   │   │   ├── AppItemTests.swift      # AppItem Codable 测试
+│   │   │   ├── FanPresetTests.swift    # FanPreset/FanPresetStore 测试
+│   │   │   ├── HardwareModelsTests.swift # 硬件模型测试
+│   │   │   └── ThresholdStoreTests.swift # 温度阈值测试
+│   │   └── Services/
+│   │       └── LocalizationTests.swift # 国际化测试
+│   └── run_tests.sh                # 测试运行脚本
 ├── Resources/
 │   ├── Info.plist
 │   └── AppIcon.icns
@@ -109,6 +123,13 @@ BatKill/
 - **管理员授权** — 通过 `AuthorizationServices` 实现一次性会话授权（`AuthorizationCreate` + `AuthorizationCopyRights`）
 - **SMC 写入** — 风扇转速 `fpe2` 类型需 ×4 写入；`flt` 类型使用 Float32 编码
 
+## 单元测试
+
+- **测试框架** — 轻量级自定义框架（`Tests/Sources/Core/TestFramework.swift`），无需 XCTest
+- **测试范围** — 模型层（AppItem、FanPreset、HardwareModels、ThresholdStore）和基础工具（Extensions、Localization）
+- **运行命令** — `bash Tests/run_tests.sh`
+- **测试数量** — 160 个测试用例，覆盖 Codable 编解码、UserDefaults 持久化、枚举值、计算属性等
+
 ## 反模式（禁止）
 
 - **禁止** 绕过电源队列直接调用 `killSelected()`/`restoreKilledApps()` — 必须通过 `AppDelegate` 的 `queuePowerAction()`
@@ -147,6 +168,9 @@ open .build/BatKill.app
 
 # 查看日志
 tail -f /tmp/batkill.log
+
+# 运行单元测试
+bash Tests/run_tests.sh
 ```
 
 ## 注意事项
