@@ -1,32 +1,32 @@
 # BatKill
 
-macOS 菜单栏工具 — 电池供电时自动终止指定软件，接入交流电时自动恢复。附带实时硬件温度监控与风扇控制。
+macOS menu bar tool — Automatically terminates specified apps on battery power, restores them when plugged in. Includes real-time hardware temperature monitoring and fan control.
 
-## 功能特性
+## Features
 
-- **电池自动停止** — Mac 切换到电池供电后，自动终止用户勾选的软件（30秒延迟，智能去抖）
-- **接入交流电自动恢复** — 插上电源后，自动重新启动被终止的软件
-- **智能电源队列** — 快速插拔电源时合并中间状态，仅对最终状态执行操作
-- **单实例运行** — 重复启动会自动聚焦已有实例
-- **零依赖** — 纯 `swiftc` 编译，仅使用 Apple SDK，无需 Xcode
-- **双语支持** — 英文 / 简体中文
-- **CPU 温度监控** — 实时显示各核心温度（P-Core / E-Core 动态命名）
-- **风扇控制** — 查看转速，手动/自动模式切换（0-1200 RPM 步进 100，1200+ 步进 1）
-- **风扇预设** — 保存/加载/删除风扇配置方案，内置「自动模式」预设
-- **温度阈值保护** — 可设置 CPU 温度阈值（60-120°C），超过后自动将风扇交还系统控制
-- **过温守护** — 超过阈值时锁定手动模式，自动恢复风扇自动模式
-- **系统信息** — 显示 CPU 型号、内存容量、磁盘容量
-- **温度角标** — 设置图标上叠加实时 CPU 温度值
-- **已选/待恢复列表** — 独立弹窗管理已选程序和待恢复程序
-- **状态栏通知** — 电源切换时在菜单栏下方显示简短通知
-- **自动更新** — 从 GitHub Release 检测并下载更新
+- **Auto-terminate on battery** — Automatically kills selected apps when Mac switches to battery power (30-second delay with smart debouncing)
+- **Auto-restore on AC power** — Automatically restarts terminated apps when power is connected
+- **Smart power queue** — Debounces rapid power plug/unplug events, only acts on final state
+- **Single instance** — Duplicate launches automatically focus the existing instance
+- **Zero dependencies** — Pure `swiftc` compilation, only uses Apple SDK, no Xcode required
+- **Bilingual support** — English / Simplified Chinese
+- **CPU temperature monitoring** — Real-time display of per-core temperatures (P-Core / E-Core dynamic naming)
+- **Fan control** — View fan speeds, manual/auto mode switching (0-1200 RPM step 100, 1200+ step 1)
+- **Fan presets** — Save/load/delete fan configuration presets, built-in "Auto" preset
+- **Temperature threshold** — Set CPU temperature threshold (60-120°C), automatically returns fan to system control when exceeded
+- **Overheat protection** — Locks manual mode when threshold exceeded, automatically restores fan to auto mode
+- **System info** — Displays CPU model, memory capacity, disk capacity
+- **Temperature badge** — Overlay real-time CPU temperature on the menu bar icon
+- **Selected/restore lists** — Independent windows to manage selected and pending-restore apps
+- **Status bar notifications** — Brief notifications below menu bar on power state changes
+- **Auto updates** — Detects and downloads updates from GitHub Releases
 
-## 系统要求
+## Requirements
 
 - macOS 14.0+ (Sonoma)
-- Apple Silicon (arm64) 或 Intel (x86_64)
+- Apple Silicon (arm64) or Intel (x86_64)
 
-## 编译与运行
+## Build & Run
 
 ```bash
 git clone https://github.com/Sakura-cool/BatKill.git && cd BatKill
@@ -34,58 +34,58 @@ bash build.sh
 open .build/BatKill.app
 ```
 
-## 使用说明
+## Usage
 
-1. 启动 BatKill — 菜单栏出现电池图标
-2. **左键点击图标** → 弹窗显示电池状态和快捷操作
-3. **点击温度图标** → 打开硬件监控窗口（CPU 温度、风扇控制、预设管理）
-4. **点击「设置」** → 勾选需要在电池时自动停止的软件
-5. **右键点击图标** → "显示窗口" 打开设置 / "退出" 关闭程序
+1. Launch BatKill — Battery icon appears in menu bar
+2. **Left-click icon** → Popover shows battery status and quick actions
+3. **Click temperature icon** → Opens hardware monitoring window (CPU temperature, fan control, preset management)
+4. **Click "Settings"** → Select apps to auto-terminate on battery
+5. **Right-click icon** → "Show Window" opens settings / "Quit" exits app
 
-电池状态下：勾选的运行中软件会被终止。接入交流电后：被终止的软件会自动恢复。
+On battery: Selected running apps are terminated. On AC power: Terminated apps are automatically restored.
 
-## 调试日志
+## Debug Logs
 
 ```bash
 tail -f /tmp/batkill.log
 ```
 
-## 项目结构
+## Project Structure
 
 ```
 Sources/
-├── App/                        # 应用入口与委托
-│   ├── BatKillApp.swift           # @main SwiftUI 入口
-│   ├── AppDelegate.swift          # 应用委托、电源队列、窗口管理
-│   └── CLIFanWriter.swift         # CLI 风扇写入（管理员提权通道）
-├── Core/                       # 基础工具
-│   ├── Logger.swift               # 文件日志 (/tmp/batkill.log)
-│   └── Extensions.swift           # Binding.onChange、Notification.Name 扩展
-├── Models/                     # 数据模型
-│   ├── AppItem.swift              # AppItem、AppCategory
-│   ├── FanPreset.swift            # FanPreset、FanPresetStore
-│   ├── HardwareModels.swift       # 温度传感器、风扇信息、SMC 数据结构
-│   └── ThresholdStore.swift       # 温度阈值持久化存储
-├── Services/                   # 业务逻辑层
-│   ├── BatteryMonitor.swift       # IOKit 电源状态监听
-│   ├── ProcessKiller.swift        # 终止/恢复应用、启动代理、后台服务
-│   ├── AppLister.swift            # 应用发现（.app、LaunchAgents、brew services）
-│   ├── HardwareMonitor.swift      # SMC 连接与读写核心
-│   ├── TemperatureReading.swift   # 温度传感器键映射与解码
-│   ├── FanController.swift        # 风扇读写与管理员授权
-│   ├── LocalizationManager.swift  # 中英双语翻译管理
-│   └── Updater.swift              # GitHub Release 版本检测与更新
-├── Views/                      # SwiftUI 视图
-│   ├── SettingsView.swift         # 主设置窗口
-│   ├── AppRowView.swift           # 应用列表行组件
-│   ├── SelectedAppsSheet.swift    # 已选应用列表弹窗
-│   ├── PendingRestoreSheet.swift  # 待恢复应用列表弹窗
-│   ├── PopoverView.swift          # 菜单栏弹窗
-│   └── TemperatureView.swift      # 温度监控窗口
-└── UI/                         # 系统级 UI
-    └── MenuBarManager.swift       # NSStatusItem、角标渲染、右键菜单、通知面板
+├── App/                        # App entry point and delegate
+│   ├── BatKillApp.swift           # @main SwiftUI entry point
+│   ├── AppDelegate.swift          # App delegate, power queue, window management
+│   └── CLIFanWriter.swift         # CLI fan write (admin privilege channel)
+├── Core/                       # Core utilities
+│   ├── Logger.swift               # File logging (/tmp/batkill.log)
+│   └── Extensions.swift           # Binding.onChange, Notification.Name extensions
+├── Models/                     # Data models
+│   ├── AppItem.swift              # AppItem, AppCategory
+│   ├── FanPreset.swift            # FanPreset, FanPresetStore
+│   ├── HardwareModels.swift       # Temperature sensors, fan info, SMC data structures
+│   └── ThresholdStore.swift       # Temperature threshold persistence
+├── Services/                   # Business logic layer
+│   ├── BatteryMonitor.swift       # IOKit power state monitoring
+│   ├── ProcessKiller.swift        # Kill/restore apps, launch agents, background services
+│   ├── AppLister.swift            # App discovery (.app, LaunchAgents, brew services)
+│   ├── HardwareMonitor.swift      # SMC connection and read/write core
+│   ├── TemperatureReading.swift   # Temperature sensor key mapping and decoding
+│   ├── FanController.swift        # Fan read/write and admin authorization
+│   ├── LocalizationManager.swift  # Bilingual translation management
+│   └── Updater.swift              # GitHub Release version checking and updates
+├── Views/                      # SwiftUI views
+│   ├── SettingsView.swift         # Main settings window
+│   ├── AppRowView.swift           # App list row component
+│   ├── SelectedAppsSheet.swift    # Selected apps list sheet
+│   ├── PendingRestoreSheet.swift  # Pending restore apps list sheet
+│   ├── PopoverView.swift          # Menu bar popover
+│   └── TemperatureView.swift      # Temperature monitoring window
+└── UI/                         # System-level UI
+    └── MenuBarManager.swift       # NSStatusItem, badge rendering, context menu, notifications
 ```
 
-## 许可
+## License
 
 MIT
