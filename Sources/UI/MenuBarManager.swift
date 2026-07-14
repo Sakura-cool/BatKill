@@ -33,6 +33,22 @@ final class MenuBarManager: NSObject, ObservableObject {
     private let popover = NSPopover()
 
     // ──────────────────────────────────────────────
+    // MARK: - Rapid Click Detection (Debug Toggle)
+    // ──────────────────────────────────────────────
+
+    /// Timestamps of recent left-clicks for rapid-click detection.
+    private var clickTimestamps: [Date] = []
+
+    /// Number of clicks required to toggle debug logging.
+    private let requiredClicks = 5
+
+    /// Time window (seconds) within which clicks must occur.
+    private let clickWindow: TimeInterval = 2.0
+
+    /// Callback invoked when rapid-click gesture is detected.
+    var onRapidClickDetected: (() -> Void)?
+
+    // ──────────────────────────────────────────────
     // MARK: - Init
     // ──────────────────────────────────────────────
 
@@ -71,12 +87,29 @@ final class MenuBarManager: NSObject, ObservableObject {
     // MARK: - Click Routing
     // ──────────────────────────────────────────────
 
-    /// Called by the status-item button action. Inspects the current
-    /// NSEvent to determine left-click (toggle popover) vs right-click
-    /// (show context menu).
     @objc private func handleClick() {
         guard let event = NSApp.currentEvent else { return }
-        event.type == .rightMouseUp ? showContextMenu() : togglePopover()
+        if event.type == .rightMouseUp {
+            showContextMenu()
+        } else {
+            recordClick()
+            togglePopover()
+        }
+    }
+
+    /// Records a left-click timestamp and checks for rapid-click gesture.
+    private func recordClick() {
+        let now = Date()
+        clickTimestamps.append(now)
+
+        // Remove clicks outside the time window
+        clickTimestamps = clickTimestamps.filter { now.timeIntervalSince($0) <= clickWindow }
+
+        // Check if we have enough clicks within the window
+        if clickTimestamps.count >= requiredClicks {
+            clickTimestamps.removeAll()
+            onRapidClickDetected?()
+        }
     }
 
     /// Shows or hides the popover, anchored to the status-item button.
@@ -118,7 +151,13 @@ final class MenuBarManager: NSObject, ObservableObject {
     /// Updates the menu-bar icon to show a red badge with the given count.
     /// When count is 0, shows the plain icon without a badge.
     /// Must be called on the main thread.
+    private var lastBadgeCount: Int = -1
+
     func updateBadge(count: Int) {
+        guard count != lastBadgeCount else { return }
+        lastBadgeCount = count
+        debugLog("[MenuBar] 更新角标: \(count)")
+        
         guard let button = statusItem.button else { return }
         DispatchQueue.main.async {
             button.image = count > 0 ? self.renderBadgedIcon(count: count)

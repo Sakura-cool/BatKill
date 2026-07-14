@@ -139,14 +139,15 @@ final class ProcessKiller: ObservableObject {
     ///   - apps: Full app list; only items with `isSelected && isRunning` are killed.
     ///   - trackForRestore: Whether to add successfully killed apps to the restore list.
     ///   - completion: Called on the main thread when the operation finishes.
-    func killSelected(_ apps: [AppItem], trackForRestore: Bool = true, completion: (() -> Void)? = nil) {
+    func killSelected(_ apps: [AppItem], trackForRestore: Bool = true, context: LogContext? = nil, completion: (() -> Void)? = nil) {
+        let ctx = context ?? LogContext(name: "killSelected")
         let selected = apps.filter { $0.isSelected && $0.isRunning }
         guard !selected.isEmpty else {
-            logger("killSelected: no selected+running apps, skipped")
+            ctx.log("没有需要终止的应用")
             DispatchQueue.main.async { completion?() }
             return
         }
-        logger("killSelected: killing \(selected.map(\.name))")
+        ctx.log("开始终止 \(selected.count) 个应用: \(selected.map(\.name).joined(separator: ", "))")
 
         isKilling = true
 
@@ -155,7 +156,10 @@ final class ProcessKiller: ObservableObject {
             var results: [String: Bool] = [:]
 
             for app in selected {
+                let terminateCtx = ctx.child("terminate")
+                terminateCtx.log("终止 \(app.name) (pid: \(app.pid ?? -1))")
                 results[app.name] = self.terminate(app)
+                terminateCtx.log("结果: \(results[app.name] ?? false ? "成功" : "失败")")
             }
 
             // Persist killed app IDs so they can be restored when AC returns
@@ -170,6 +174,9 @@ final class ProcessKiller: ObservableObject {
                 }
                 self.killedRestorePaths = restoreList
             }
+
+            let successCount = results.values.filter { $0 }.count
+            ctx.complete(success: true, extra: "\(successCount)/\(selected.count) 成功")
 
             DispatchQueue.main.async {
                 self.lastKillResults = results
@@ -188,14 +195,15 @@ final class ProcessKiller: ObservableObject {
     ///
     /// Runs on a background thread, clears the restore list on completion,
     /// and posts a notification with the names of restored apps.
-    func restoreKilledApps(using apps: [AppItem], completion: (() -> Void)? = nil) {
+    func restoreKilledApps(using apps: [AppItem], context: LogContext? = nil, completion: (() -> Void)? = nil) {
+        let ctx = context ?? LogContext(name: "restoreKilledApps")
         let paths = killedRestorePaths
         guard !paths.isEmpty else {
-            logger("restoreKilledApps: no paths to restore, skipped")
+            ctx.log("没有需要恢复的应用")
             DispatchQueue.main.async { completion?() }
             return
         }
-        logger("restoreKilledApps: restoring \(paths)")
+        ctx.log("开始恢复 \(paths.count) 个应用")
         isRestoring = true
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -203,10 +211,16 @@ final class ProcessKiller: ObservableObject {
             var restoredNames: [String] = []
 
             for appId in paths {
+                let restoreCtx = ctx.child("restoreSingle")
                 if let name = self.restoreSingleApp(appId, using: apps) {
                     restoredNames.append(name)
+                    restoreCtx.log("恢复 \(name) 成功")
+                } else {
+                    restoreCtx.log("恢复 \(appId) 失败")
                 }
             }
+
+            ctx.complete(success: true, extra: "\(restoredNames.count)/\(paths.count) 成功")
 
             DispatchQueue.main.async {
                 self.killedRestorePaths = []

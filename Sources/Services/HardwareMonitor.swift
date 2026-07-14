@@ -152,13 +152,20 @@ final class HardwareMonitor: ObservableObject {
     /// Opens a connection to the AppleSMC IOKit driver.
     /// Sets `connection` to 0 on failure (no SMC available).
     private func open() {
+        let ctx = LogContext(name: "smc.open")
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
-        guard service != 0 else { return }
+        guard service != 0 else {
+            ctx.fail("未找到 AppleSMC 服务")
+            return
+        }
         defer { IOObjectRelease(service) }
 
         let result = IOServiceOpen(service, mach_task_self_, 0, &connection)
         if result != kIOReturnSuccess {
             connection = 0
+            ctx.fail("打开 SMC 连接失败: \(result)")
+        } else {
+            ctx.complete(success: true)
         }
     }
 

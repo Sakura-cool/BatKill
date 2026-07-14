@@ -53,6 +53,8 @@ final class AppLister: ObservableObject {
     /// Triggers a full background scan of all app categories.
     /// Updates `apps` on the main thread when complete.
     func refreshAppList() {
+        let ctx = LogContext(name: "refreshAppList")
+        ctx.log("开始扫描应用列表")
         isLoading = true
         hasLoaded = false
 
@@ -60,6 +62,8 @@ final class AppLister: ObservableObject {
             guard let self = self else { return }
             let saved = self.selectedPaths
             let newApps = self.buildAppList(savedPaths: saved)
+
+            ctx.complete(success: true, extra: "发现 \(newApps.count) 个应用")
 
             DispatchQueue.main.async {
                 self.apps = newApps

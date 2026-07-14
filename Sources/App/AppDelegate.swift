@@ -91,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the power source flickers.
     private let powerActionDelaySeconds: TimeInterval = 30
 
+    /// Current power action context for structured logging.
+    private var powerActionContext: LogContext?
+
     // MARK: - Auto-Kill Preference
 
     /// Convenience accessor for the `autoKillEnabled` user default.
@@ -142,6 +145,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 1. Create and configure the menu bar icon + popover.
         let mgr = MenuBarManager()
         menuBarManager = mgr
+
+        // Connect rapid-click gesture to debug logging toggle
+        mgr.onRapidClickDetected = { [weak self] in
+            DebugLogger.toggle()
+            let state = DebugLogger.isEnabled ? "ON" : "OFF"
+            self?.menuBarManager?.showBriefNotification("Debug Logging: \(state)", duration: 2)
+        }
+
         let pv = PopoverView(
             batteryMonitor: batteryMonitor, appLister: appLister,
             processKiller: processKiller, lm: localizationManager)
@@ -300,50 +311,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// retained in `pendingPowerAction`. If no operation is in progress
     /// and no cooldown timer is active, the action executes immediately.
     private func queuePowerAction(isOnBattery: Bool) {
-        logger("queuePowerAction: isOnBattery=\(isOnBattery) inProgress=\(powerActionInProgress) hasTimer=\(powerDelayTimer != nil) hadPending=\(pendingPowerAction != nil)")
+        let ctx = LogContext(name: "queuePowerAction")
+        powerActionContext = ctx
+        ctx.log("电源状态: \(isOnBattery ? "电池" : "交流电"), inProgress=\(powerActionInProgress), hasTimer=\(powerDelayTimer != nil)")
         pendingPowerAction = isOnBattery
         processNextPowerAction()
     }
 
-    /// Process the next queued action when idle and not in cooldown.
-    ///
-    /// Guard conditions:
-    ///   1. No kill/restore operation is in flight (`powerActionInProgress`)
-    ///   2. No cooldown timer is active (`powerDelayTimer == nil`)
-    ///   3. There is actually a pending action (`pendingPowerAction != nil`)
     private func processNextPowerAction() {
         guard !powerActionInProgress, powerDelayTimer == nil, let onBattery = pendingPowerAction else {
+            powerActionContext?.debug("跳过: inProgress=\(powerActionInProgress), hasTimer=\(powerDelayTimer != nil), pending=\(pendingPowerAction != nil)")
             return
         }
 
         pendingPowerAction = nil
         powerActionInProgress = true
-        logger("processNextPowerAction: executing for isOnBattery=\(onBattery)")
+        
+        let ctx = powerActionContext ?? LogContext(name: "powerAction")
+        let actionCtx = ctx.child(onBattery ? "killSelected" : "restoreKilledApps")
+        actionCtx.log("开始执行 \(onBattery ? "终止" : "恢复") 操作")
 
         if onBattery {
             if autoKillEnabled {
-                processKiller.killSelected(appLister.apps) { [weak self] in
+                processKiller.killSelected(appLister.apps, context: actionCtx) { [weak self] in
                     self?.appLister.refreshAppList()
                     self?.onPowerActionCompleted(onBattery: onBattery)
                 }
             } else {
+                actionCtx.log("autoKill 未启用，跳过")
                 onPowerActionCompleted(onBattery: onBattery)
             }
         } else {
-            processKiller.restoreKilledApps(using: appLister.apps) { [weak self] in
+            processKiller.restoreKilledApps(using: appLister.apps, context: actionCtx) { [weak self] in
                 self?.appLister.refreshAppList()
                 self?.onPowerActionCompleted(onBattery: onBattery)
             }
         }
     }
 
-    /// Called on the main thread when the current kill/restore finishes
-    /// or is skipped. Starts the cooldown timer before allowing the next
-    /// queued action to proceed. If a new power transition arrived during
-    /// the operation, it will be processed after the cooldown expires.
     private func onPowerActionCompleted(onBattery: Bool) {
         powerActionInProgress = false
-        logger("onPowerActionCompleted: pending=\(pendingPowerAction != nil), starting \(powerActionDelaySeconds)s delay")
+        
+        let ctx = powerActionContext ?? LogContext(name: "powerAction")
+        ctx.log("操作完成，启动 \(Int(powerActionDelaySeconds))s 冷却定时器")
 
         let msg: String
         if onBattery {
@@ -360,7 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         powerDelayTimer = Timer.scheduledTimer(withTimeInterval: powerActionDelaySeconds, repeats: false) { [weak self] _ in
             guard let self = self else { return }
             self.powerDelayTimer = nil
-            logger("onPowerActionCompleted: delay ended, processing next")
+            self.powerActionContext?.log("冷却结束，处理下一个操作")
             self.processNextPowerAction()
         }
     }

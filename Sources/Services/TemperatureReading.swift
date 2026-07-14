@@ -98,12 +98,33 @@ extension HardwareMonitor {
         return value
     }
 
+    /// Cached list of SMC keys that exist on this hardware.
+    /// Populated on first read, then reused for subsequent reads.
+    private static var validTempKeysCache: [(key: String, name: String, category: TemperatureCategory)]?
+
     func readTemperatures() -> [TemperatureSensor] {
         var seen = Set<String>()
         var results: [TemperatureSensor] = []
         var pCoreTemps: [Double] = []
 
-        for item in knownTempKeys {
+        // Use cached keys if available, otherwise scan and cache
+        let keysToRead: [(key: String, name: String, category: TemperatureCategory)]
+        if let cached = HardwareMonitor.validTempKeysCache {
+            keysToRead = cached
+        } else {
+            // First run: scan all keys and cache only valid ones
+            var validKeys: [(key: String, name: String, category: TemperatureCategory)] = []
+            for item in knownTempKeys {
+                if readKeyData(item.key) != nil {
+                    validKeys.append(item)
+                }
+            }
+            HardwareMonitor.validTempKeysCache = validKeys
+            keysToRead = validKeys
+            debugLog("Cached \(validKeys.count) valid temperature keys")
+        }
+
+        for item in keysToRead {
             guard !seen.contains(item.key) else { continue }
             if let sensor = readTempSensor(key: item.key, name: item.name, category: item.category) {
                 seen.insert(item.key)

@@ -27,25 +27,23 @@ extension HardwareMonitor {
     ///   - auto: `true` for automatic mode, `false` for manual mode.
     /// - Returns: `true` if the SMC write succeeded.
     func setFanMode(fanIndex: Int, auto: Bool) -> Bool {
+        let ctx = LogContext(name: "setFanMode")
+        ctx.log("设置风扇 \(fanIndex) 模式: \(auto ? "自动" : "手动")")
         let key = String(format: "F%dMd", fanIndex)
         var value: UInt8 = auto ? 0 : 1
         let ok = writeBytes(key: key, bytes: &value, length: 1)
         lastFanWriteOK = ok
+        ctx.complete(success: ok)
         refresh()
         return ok
     }
 
-    /// Sets the target speed for a fan in RPM.
-    /// Delegates to `writeFanTarget()` which handles the correct data
-    /// encoding based on the SMC key's data type. Refreshes after write.
-    ///
-    /// - Parameters:
-    ///   - fanIndex: Zero-based fan index.
-    ///   - speed: Target speed in RPM.
-    /// - Returns: `true` if the SMC write succeeded.
     func setFanSpeed(fanIndex: Int, speed: Double) -> Bool {
+        let ctx = LogContext(name: "setFanSpeed")
+        ctx.log("设置风扇 \(fanIndex) 转速: \(Int(speed)) RPM")
         let ok = writeFanTarget(fanIndex: fanIndex, speed: speed)
         lastFanWriteOK = ok
+        ctx.complete(success: ok)
         refresh()
         return ok
     }
@@ -84,15 +82,20 @@ extension HardwareMonitor {
     ///
     /// - Returns: `true` if authorization was granted.
     func requestAdminAuth() -> Bool {
+        let ctx = LogContext(name: "requestAdminAuth")
         // Reuse existing authorization if already granted
         if HardwareMonitor.authRef != nil {
             isAdminAuthorized = true
+            ctx.complete(success: true, extra: "复用现有授权")
             return true
         }
 
         var ref: AuthorizationRef?
         guard AuthorizationCreate(nil, nil, [], &ref) == errAuthorizationSuccess,
-              let ref = ref else { return false }
+              let ref = ref else {
+            ctx.fail("创建授权引用失败")
+            return false
+        }
 
         let rightName = kAuthorizationRightExecute
         return rightName.withCString { cName in
@@ -104,11 +107,13 @@ extension HardwareMonitor {
                 if AuthorizationCopyRights(ref, &rights, nil, flags, nil) == errAuthorizationSuccess {
                     HardwareMonitor.authRef = ref
                     isAdminAuthorized = true
+                    ctx.complete(success: true)
                     return true
                 }
 
                 // Authorization denied or cancelled -- clean up
                 AuthorizationFree(ref, [.destroyRights])
+                ctx.fail("授权被拒绝或取消")
                 return false
             }
         }

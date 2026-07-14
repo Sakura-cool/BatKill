@@ -75,11 +75,12 @@ final class BatteryMonitor: ObservableObject {
 
             if let state = desc[kIOPSPowerSourceStateKey] as? String {
                 let onBattery = (state == kIOPSBatteryPowerValue)
-                logger("IOKit state=\(state) → onBattery=\(onBattery) (prev=\(self.isOnBattery))")
                 powerSource = onBattery ? "Battery" : "AC Power"
                 if isOnBattery != onBattery {
                     logger("⚡ isOnBattery changed: \(self.isOnBattery) → \(onBattery)")
                     isOnBattery = onBattery
+                } else {
+                    debugLog("IOKit state=\(state) → onBattery=\(onBattery)")
                 }
             }
 

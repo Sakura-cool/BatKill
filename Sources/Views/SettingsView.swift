@@ -498,7 +498,7 @@ struct SettingsView: View {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            print("Failed to update login item: \(error)")
+            logger("更新登录项失败: \(error)")
             launchAtLogin = !enabled // revert
         }
     }

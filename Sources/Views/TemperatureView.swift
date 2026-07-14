@@ -94,18 +94,17 @@ struct TemperatureView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
-                        // Red warning banner when overheating
                         if hardwareMonitor.thermalThrottled {
                             thermalWarningBanner
                         }
-                        // Temperature threshold configuration
-                        thresholdSection
-                        // Collapsible temperature sensor groups
+                        if !hardwareMonitor.fans.isEmpty {
+                            thresholdSection
+                        }
                         temperatureGroups
-                        // Fan preset management
-                        presetSection
-                        // Per-fan speed controls
-                        fanSection
+                        if !hardwareMonitor.fans.isEmpty {
+                            presetSection
+                            fanSection
+                        }
                     }
                     .padding()
                 }
@@ -136,8 +135,7 @@ struct TemperatureView: View {
                 presetStore.update(auto)
                 executePreset(auto)
             }
-            // Start a 1-second refresh timer for live sensor data
-            refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
                 hardwareMonitor.refresh()
                 hardwareMonitor.checkThreshold(thresholdStore.threshold)
             }
