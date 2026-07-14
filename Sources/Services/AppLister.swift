@@ -52,9 +52,14 @@ final class AppLister: ObservableObject {
 
     /// Triggers a full background scan of all app categories.
     /// Updates `apps` on the main thread when complete.
+    /// Skips if a scan is already in progress to prevent overlapping results.
     func refreshAppList() {
         let ctx = LogContext(name: "refreshAppList")
         ctx.log("开始扫描应用列表")
+        guard !isLoading else {
+            ctx.debug("扫描已在进行中，跳过")
+            return
+        }
         isLoading = true
         hasLoaded = false
 

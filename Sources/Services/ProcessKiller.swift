@@ -594,7 +594,7 @@ final class ProcessKiller: ObservableObject {
     // MARK: - Notifications
 
     /// Posts a user notification summarizing which apps were killed
-    /// and which failed. Requests notification authorization if needed.
+    /// and which failed. Notification authorization is requested once at launch.
     private func postKillNotification(results: [String: Bool]) {
         let killed = results.filter { $0.value }.map { $0.key }
         let failed = results.filter { !$0.value }.map { $0.key }
@@ -609,8 +609,6 @@ final class ProcessKiller: ObservableObject {
         let body = bodyParts.joined(separator: "\n")
 
         let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-
         let content = UNMutableNotificationContent()
         content.title = "BatKill"
         content.body = body
@@ -628,7 +626,6 @@ final class ProcessKiller: ObservableObject {
     private func postRestoreNotification(names: [String]) {
         guard !names.isEmpty else { return }
         let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
         let content = UNMutableNotificationContent()
         content.title = "BatKill"

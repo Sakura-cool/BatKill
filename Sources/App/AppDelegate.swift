@@ -24,6 +24,7 @@ import SwiftUI
 import AppKit
 import Combine
 import ServiceManagement
+import UserNotifications
 
 // MARK: - App Delegate
 
@@ -161,10 +162,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 2. Begin scanning installed applications.
         appLister.refreshAppList()
 
-        // 3. Check GitHub for a new release in the background.
-        versionChecker.checkForUpdate()
+        // 3. Request notification authorization once at launch (instead of
+        //    per-kill/restore, which would spam the user with permission prompts).
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, error in
+            if let error = error {
+                logger("Notification authorization failed: \(error.localizedDescription)")
+            }
+        }
 
-        // 4. Listen for window-open requests via NotificationCenter.
+        // 4. Check GitHub for a new release in the background, but defer
+        //    by 30s to avoid slowing cold-start and to respect network latency.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0) { [weak self] in
+            self?.versionChecker.checkForUpdate()
+        }
+
+        // 5. Listen for window-open requests via NotificationCenter.
         NotificationCenter.default.addObserver(
             self, selector: #selector(showSettingsWindow),
             name: .showSettings, object: nil)
@@ -172,7 +184,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, selector: #selector(showTemperatureWindow),
             name: .showTemperature, object: nil)
 
-        // 5. Subscribe to state changes for badge and power actions.
+        // 6. Subscribe to state changes for badge and power actions.
         observeStateChanges()
     }
 

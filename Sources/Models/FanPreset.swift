@@ -103,17 +103,16 @@ final class FanPresetStore: ObservableObject {
 
     // MARK: - Load
 
-    /// Loads presets from UserDefaults. If decoding fails, initializes with a default set.
-    /// Always calls `ensureAutoPreset` afterward to guarantee the built-in Auto preset exists.
+    /// Loads presets from UserDefaults. If decoding fails, initializes with an
+    /// empty preset list (the built-in Auto preset is added later by the caller
+    /// once the actual fan count from HardwareMonitor is known).
     func load() {
         guard let data = UserDefaults.standard.data(forKey: presetsKey),
               let decoded = try? JSONDecoder().decode([FanPreset].self, from: data) else {
-            ensureAutoPreset(fanCount: 2)
             return
         }
         presets = decoded
         activePresetID = UserDefaults.standard.string(forKey: activeKey).flatMap { UUID(uuidString: $0) }
-        ensureAutoPreset(fanCount: 2)
     }
 
     /// Ensures the built-in "Auto" preset exists and has the correct number of fan entries.
