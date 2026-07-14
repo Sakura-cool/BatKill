@@ -137,7 +137,9 @@ struct TemperatureView: View {
             }
             refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
                 hardwareMonitor.refresh()
-                hardwareMonitor.checkThreshold(thresholdStore.threshold)
+                DispatchQueue.main.async {
+                    hardwareMonitor.checkThreshold(thresholdStore.threshold)
+                }
             }
         }
         .onDisappear {
@@ -701,8 +703,7 @@ struct TemperatureView: View {
                             set: { fanPendingSpeeds[fan.index] = $0 }
                         ),
                         in: 0...fan.maxSpeed,
-                        // Coarse steps below 1200 RPM, fine steps above
-                        step: pendingSpeed <= 1200 ? 100 : 1
+                        step: 100
                     )
 
                     Image(systemName: "plus")

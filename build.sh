@@ -28,6 +28,8 @@ swiftc \
   -sdk "$SDK_PATH" \
   -target "$TARGET" \
   -parse-as-library \
+  -O \
+  -whole-module-optimization \
   -o "$BUILD_DIR/$APP_NAME" \
   $SWIFT_FILES \
   -framework SwiftUI \

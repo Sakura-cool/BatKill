@@ -96,6 +96,8 @@ final class HardwareMonitor: ObservableObject {
     // MARK: - Initialization
 
     /// Opens the SMC connection and performs an initial data refresh.
+    /// The refresh() method handles background SMC reads and main-thread
+    /// publishing for @Published thread-safety.
     init() {
         open()
         if connection != 0 {
@@ -126,14 +128,23 @@ final class HardwareMonitor: ObservableObject {
     }
 
     /// Refreshes all hardware data: temperatures and fan info.
-    /// Called after init and after every fan write operation.
+    /// Reads SMC on a background queue to avoid blocking the main thread,
+    /// then publishes results on the main thread for @Published safety.
+    ///
+    /// Called after init, on a 2s timer, and after fan writes.
     func refresh() {
-        temperatures = readTemperatures()
-        fans = readFans()
-
-        // Find the maximum individual P-Core temperature (excluding aggregate rows)
-        let cpuTemps = temperatures.filter { $0.category == .cpu && !$0.name.contains("Aggregate") }.map(\.temperature)
-        maxCPUTemp = cpuTemps.max() ?? 0
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let temps = self.readTemperatures()
+            let fans = self.readFans()
+            let cpuTemps = temps.filter { $0.category == .cpu && !$0.name.contains("Aggregate") }.map(\.temperature)
+            let maxTemp = cpuTemps.max() ?? 0
+            DispatchQueue.main.async {
+                self.temperatures = temps
+                self.fans = fans
+                self.maxCPUTemp = maxTemp
+            }
+        }
     }
 
     /// Checks whether the maximum CPU temperature meets or exceeds the

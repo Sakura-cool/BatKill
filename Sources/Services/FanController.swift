@@ -156,9 +156,9 @@ extension HardwareMonitor {
             }
             }
 
-            // Refresh data and notify caller on the main thread
+            // refresh() handles its own background/main-thread scheduling
+            self?.refresh()
             DispatchQueue.main.async {
-                self?.refresh()
                 completion(true)
             }
         }
