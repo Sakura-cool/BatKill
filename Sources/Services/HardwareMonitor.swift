@@ -93,6 +93,22 @@ final class HardwareMonitor: ObservableObject {
     /// Persists for the lifetime of the process once granted.
     static var authRef: AuthorizationRef?
 
+    /// Whether the user explicitly denied (or cancelled) the admin auth dialog.
+    /// When `true`, `requestAdminAuth()` returns `false` without showing the
+    /// dialog. Reset by `resetAuthDenied()` before explicit user-initiated retries.
+    static var authDenied = false
+
+    /// Whether an auth request is currently in flight. Prevents showing more
+    /// than one auth dialog simultaneously. Reset after the dialog completes.
+    static var authInProgress = false
+
+    /// Resets the denied state so the next `requestAdminAuth()` call will
+    /// actually show the auth dialog. Call this ONLY before explicit user
+    /// actions (button taps), NOT before automatic/derived calls.
+    static func resetAuthDenied() {
+        authDenied = false
+    }
+
     // MARK: Singleton
 
     /// Shared singleton instance, created once at app startup.

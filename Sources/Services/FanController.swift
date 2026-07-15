@@ -73,50 +73,79 @@ extension HardwareMonitor {
     // MARK: - Admin Authorization
 
     /// Requests one-time administrator authorization via the macOS
-    /// AuthorizationServices framework. On success, stores the auth
-    /// reference for the process lifetime and sets `isAdminAuthorized`.
+    /// AuthorizationServices framework.
     ///
-    /// Uses `AuthorizationCreate` + `AuthorizationCopyRights` with
-    /// `.preAuthorize`, `.extendRights`, and `.interactionAllowed` flags
-    /// to show the system password dialog.
+    /// Authorization lifecycle (three states, single-instance):
+    ///   1. **Authorized** (`authRef != nil`) → immediately returns `true`
+    ///   2. **Denied** (`authDenied == true`) → returns `false` without dialog
+    ///   3. **In flight** (`authInProgress == true`) → returns `false` without dialog
+    ///
+    /// The denied state is reset by `HardwareMonitor.resetAuthDenied()` which
+    /// callers MUST invoke before explicit user-initiated retries (button taps).
+    /// Automatic/derived callers must NOT reset — they should respect the denial.
     ///
     /// - Returns: `true` if authorization was granted.
     func requestAdminAuth() -> Bool {
         let ctx = LogContext(name: "requestAdminAuth")
-        // Reuse existing authorization if already granted
+
+        // ── 1. Already authorized → reuse ──
         if HardwareMonitor.authRef != nil {
             isAdminAuthorized = true
+            HardwareMonitor.authDenied = false
             ctx.complete(success: true, extra: "复用现有授权")
             return true
+        }
+
+        // ── 2. Previously denied → honour user's choice, no dialog ──
+        guard !HardwareMonitor.authDenied else {
+            ctx.log("用户此前拒绝了授权，跳过弹窗")
+            return false
+        }
+
+        // ── 3. Already in flight → single-instance guard ──
+        guard !HardwareMonitor.authInProgress else {
+            ctx.log("授权弹窗已存在，跳过")
+            return false
+        }
+
+        // ── 4. Show the system auth dialog ──
+        HardwareMonitor.authInProgress = true
+        defer {
+            // The synchronous call below blocks until user interacts,
+            // so inProgress is always reset immediately after, but the
+            // guard above prevents concurrent entry from other callers.
+            HardwareMonitor.authInProgress = false
         }
 
         var ref: AuthorizationRef?
         guard AuthorizationCreate(nil, nil, [], &ref) == errAuthorizationSuccess,
               let ref = ref else {
             ctx.fail("创建授权引用失败")
+            HardwareMonitor.authDenied = true
             return false
         }
 
         let rightName = kAuthorizationRightExecute
-        return rightName.withCString { cName in
+        let ok = rightName.withCString { cName in
             var item = AuthorizationItem(name: cName, valueLength: 0, value: nil, flags: 0)
             return withUnsafeMutablePointer(to: &item) { itemPtr in
                 var rights = AuthorizationRights(count: 1, items: itemPtr)
                 let flags: AuthorizationFlags = [.preAuthorize, .extendRights, .interactionAllowed]
-
-                if AuthorizationCopyRights(ref, &rights, nil, flags, nil) == errAuthorizationSuccess {
-                    HardwareMonitor.authRef = ref
-                    isAdminAuthorized = true
-                    ctx.complete(success: true)
-                    return true
-                }
-
-                // Authorization denied or cancelled -- clean up
-                AuthorizationFree(ref, [.destroyRights])
-                ctx.fail("授权被拒绝或取消")
-                return false
+                return AuthorizationCopyRights(ref, &rights, nil, flags, nil) == errAuthorizationSuccess
             }
         }
+
+        if ok {
+            HardwareMonitor.authRef = ref
+            isAdminAuthorized = true
+            HardwareMonitor.authDenied = false
+            ctx.complete(success: true)
+        } else {
+            AuthorizationFree(ref, [.destroyRights])
+            HardwareMonitor.authDenied = true
+            ctx.fail("授权被拒绝或取消")
+        }
+        return ok
     }
 
     /// Executes the app's own binary with elevated privileges, passing
