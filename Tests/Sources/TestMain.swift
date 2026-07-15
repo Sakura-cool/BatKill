@@ -18,6 +18,7 @@ struct TestMain {
         TestRunner.register("HardwareModelsTests") { HardwareModelsTests() }
         TestRunner.register("LocalizationTests") { LocalizationTests() }
         TestRunner.register("ExtensionsTests") { ExtensionsTests() }
+        TestRunner.register("BatteryOptimizationTests") { BatteryOptimizationTests() }
         
         // Run all tests
         TestRunner.runAll()
