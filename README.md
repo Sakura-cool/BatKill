@@ -30,8 +30,15 @@ macOS 菜单栏工具 — 电池供电时自动终止指定软件，接入交流
 
 ```bash
 git clone https://github.com/Sakura-cool/BatKill.git && cd BatKill
-bash build.sh
-open .build/BatKill.app
+bash build.sh                    # 编译（输出 .build/arm64/BatKill-arm64.app）
+open .build/arm64/BatKill-arm64.app
+```
+
+**发版打包（DMG）：**
+
+```bash
+bash build.sh --dmg              # 编译 + DMG 打包
+# 输出 .package/arm64/BatKill-arm64.dmg
 ```
 
 ## 使用说明

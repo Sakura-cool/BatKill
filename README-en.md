@@ -30,8 +30,15 @@ macOS menu bar tool — Automatically terminates specified apps on battery power
 
 ```bash
 git clone https://github.com/Sakura-cool/BatKill.git && cd BatKill
-bash build.sh
-open .build/BatKill.app
+bash build.sh                    # Build (outputs .build/arm64/BatKill-arm64.app)
+open .build/arm64/BatKill-arm64.app
+```
+
+**Release DMG：**
+
+```bash
+bash build.sh --dmg              # Build + DMG package
+# Outputs .package/arm64/BatKill-arm64.dmg
 ```
 
 ## Usage

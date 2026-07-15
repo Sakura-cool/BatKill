@@ -2,9 +2,9 @@
 //  BatKill
 //
 //  In-app update system that checks for new releases on GitHub, compares
-//  version numbers, downloads the architecture-appropriate zip, and
-//  performs a hot-swap installation (download -> unzip -> replace bundle
-//  -> relaunch).
+//  version numbers, downloads the architecture-appropriate dmg, and
+//  performs a hot-swap installation (download -> mount dmg -> copy bundle
+//  -> replace -> relaunch).
 //
 //  Components:
 //  - GitHubRelease / ReleaseAsset: Decodable models for the GitHub Releases API
@@ -26,7 +26,7 @@ struct GitHubRelease: Decodable {
     let name: String
     /// Release notes body (may contain Markdown).
     let body: String?
-    /// Attached binary assets (zip files for arm64/x86_64).
+    /// Attached binary assets (dmg files for arm64/x86_64).
     let assets: [ReleaseAsset]
 
     enum CodingKeys: String, CodingKey {
@@ -38,7 +38,7 @@ struct GitHubRelease: Decodable {
 /// Decodable model for a release asset (downloadable file) attached to
 /// a GitHub release.
 struct ReleaseAsset: Decodable {
-    /// Filename (e.g., "BatKill-arm.app.zip").
+    /// Filename (e.g., "BatKill-arm64.dmg").
     let name: String
     /// Direct download URL for the asset.
     let browserDownloadURL: String
@@ -122,21 +122,24 @@ final class VersionChecker: ObservableObject {
 
 // MARK: - Updater
 
-/// Handles the full update lifecycle: download, extract, install, relaunch.
-///
-/// The installation process:
-/// 1. Downloads the architecture-appropriate zip from GitHub Releases
-/// 2. Extracts to a temporary directory
-/// 3. Writes a background shell script that:
-///    a. Waits for the current process to exit
-///    b. Removes quarantine attributes from the new bundle
-///    c. Replaces the old bundle with `ditto`
-///    d. Ensures executable permissions
-///    e. Removes quarantine on the final location
-///    f. Relaunches the app and cleans up
-/// 4. Launches the script in the background
-/// 5. Terminates the current process
+/// Handles the full update lifecycle: download, mount, install, relaunch.
+    ///
+    /// The installation process:
+    /// 1. Downloads the architecture-appropriate dmg from GitHub Releases
+    /// 2. Mounts the dmg and copies the .app to a temporary directory
+    /// 3. Writes a background shell script that:
+    ///    a. Waits for the current process to exit
+    ///    b. Removes quarantine attributes from the new bundle
+    ///    c. Replaces the old bundle with `ditto`
+    ///    d. Ensures executable permissions
+    ///    e. Removes quarantine on the final location
+    ///    f. Relaunches the app and cleans up
+    /// 4. Launches the script in the background
+    /// 5. Terminates the current process
 final class Updater: ObservableObject {
+    /// App name, used for constructing paths in the update process.
+    private let APP_NAME = "BatKill"
+
     /// Whether a download is currently in progress.
     @Published var isDownloading = false
 
@@ -154,12 +157,12 @@ final class Updater: ObservableObject {
         self.checker = checker
     }
 
-    /// Downloads the latest release zip and installs it.
+    /// Downloads the latest release dmg and installs it.
     /// Selects the correct asset (arm64 vs x86_64) based on the
     /// current architecture.
     func downloadAndInstall() {
         guard let tagName = checker.latestVersion else { return }
-        let assetName = currentArch() == "arm64" ? "BatKill-arm.app.zip" : "BatKill-x86.app.zip"
+        let assetName = "BatKill-\(currentArch()).dmg"
         let downloadURL = "https://github.com/Sakura-cool/BatKill/releases/download/v\(tagName)/\(assetName)"
 
         guard let url = URL(string: downloadURL) else { return }
@@ -183,7 +186,7 @@ final class Updater: ObservableObject {
                 return
             }
 
-            self?.installFromZip(tempURL: tempURL)
+            self?.installFromDmg(tempURL: tempURL)
         }
 
         // Observe download progress for the UI progress bar
@@ -196,22 +199,34 @@ final class Updater: ObservableObject {
         _ = observation
     }
 
-    /// Extracts the downloaded zip, finds the .app bundle inside, writes
+    /// Mounts the downloaded dmg, copies the .app bundle, writes
     /// an update script, launches it in the background, and terminates
     /// the current process.
-    private func installFromZip(tempURL: URL) {
+    private func installFromDmg(tempURL: URL) {
+        let mountPoint = FileManager.default.temporaryDirectory.appendingPathComponent("BatKill-mount-\(UUID().uuidString)")
         let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("BatKill-update-\(UUID().uuidString)")
 
         do {
+            try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
 
-            try runShell("unzip -o \"\(tempURL.path)\" -d \"\(tmpDir.path)\" 2>/dev/null")
+            // Mount dmg
+            try runShell("hdiutil attach \"\(tempURL.path)\" -nobrowse -mountpoint \"\(mountPoint.path)\" 2>/dev/null")
 
-            guard let appPath = findApp(in: tmpDir) else {
-                logger("Updater: no .app found in extracted zip")
+            // Find .app in mounted volume
+            guard let appPath = findApp(in: mountPoint) else {
+                try? runShell("hdiutil detach \"\(mountPoint.path)\" 2>/dev/null")
+                logger("Updater: no .app found in dmg")
                 DispatchQueue.main.async { self.statusMessage = "Update failed: app not found" }
                 return
             }
+
+            // Copy .app to tmpDir for installation
+            try runShell("ditto \"\(appPath.path)\" \"\(tmpDir.path)/\(APP_NAME).app\"")
+            let newAppPath = tmpDir.appendingPathComponent("\(APP_NAME).app")
+
+            // Detach dmg
+            try runShell("hdiutil detach \"\(mountPoint.path)\" 2>/dev/null")
 
             let currentAppPath = Bundle.main.bundlePath
 
@@ -224,13 +239,13 @@ final class Updater: ObservableObject {
             done
 
             # Remove quarantine from the NEW app BEFORE copying (recursive)
-            xattr -rd com.apple.quarantine "\(appPath.path)" 2>/dev/null || true
+            xattr -rd com.apple.quarantine "\(newAppPath.path)" 2>/dev/null || true
 
             # Remove old bundle
             rm -rf "\(currentAppPath)"
 
             # Copy clean bundle to original location
-            ditto "\(appPath.path)" "\(currentAppPath)"
+            ditto "\(newAppPath.path)" "\(currentAppPath)"
 
             # Ensure executable permission
             chmod +x "\(currentAppPath)/Contents/MacOS/BatKill"

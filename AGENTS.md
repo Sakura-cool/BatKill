@@ -1,6 +1,6 @@
 # BatKill — 项目知识库
 
-**更新日期:** 2026-07-14
+**更新日期:** 2026-07-15
 **版本:** v0.0.19
 **技术栈:** Swift 5 / SwiftUI / AppKit / IOKit / Combine / AuthorizationServices
 **目标系统:** macOS 14.0+ (arm64 + x86_64)
@@ -82,11 +82,13 @@ BatKill/
 ├── Resources/
 │   ├── Info.plist
 │   └── AppIcon.icns
-├── Releases/
-│   ├── arm64/BatKill-arm.app        # arm64 打包
-│   └── x86_64/BatKill-x86.app      # x86_64 打包
-├── build.sh                         # swiftc 编译脚本，无需 Xcode
-└── generate_icon.sh
+├── Sources/                      # 源代码
+├── Tests/                        # 单元测试
+├── .build/                       # 编译输出（.app，带架构后缀）
+├── .package/                     # 发版打包（.dmg，带架构后缀）
+├── build.sh                      # swiftc 编译脚本，无需 Xcode
+├── generate_icon.sh
+└── AGENTS.md                     # 项目知识库
 ```
 
 ## 快速定位
@@ -151,20 +153,22 @@ BatKill/
 ## 命令
 
 ```bash
-# 编译 (arm64)
+# 编译 (当前架构)
 bash build.sh
+open .build/arm64/BatKill-arm64.app    # 或 arch 对应路径
 
 # 交叉编译 (x86_64)
-SDK_PATH="$(xcrun --show-sdk-path --sdk macosx)"
-swiftc -sdk "$SDK_PATH" -target x86_64-apple-macosx14.0 \
-  -parse-as-library -o .build-x86/BatKill \
-  Sources/App/*.swift Sources/Core/*.swift Sources/Models/*.swift \
-  Sources/Services/*.swift Sources/Views/*.swift Sources/UI/*.swift \
-  -framework SwiftUI -framework AppKit -framework IOKit \
-  -framework UserNotifications -framework ServiceManagement -framework Combine
+bash build.sh --arch x86_64
 
-# 运行（编译后）
-open .build/BatKill.app
+# 双架构编译
+bash build.sh --all
+
+# 发版打包 (编译 + DMG)
+bash build.sh --dmg
+# .package/arm64/BatKill-arm64.dmg
+
+# 双架构 + 发版
+bash build.sh --all --dmg
 
 # 查看日志
 tail -f /tmp/batkill.log
@@ -181,4 +185,3 @@ bash Tests/run_tests.sh
 - 恢复列表 `killedRestorePaths` 只记录**成功终止**的软件
 - 风扇预设存储在 UserDefaults 中（key: `fanPresets`），支持保存/加载/删除/激活
 - 管理员授权通过 `dlsym` 动态加载 `AuthorizationExecuteWithPrivileges`（已废弃 API，不在 Swift 头文件中）
-- 交叉编译命令需按子目录逐个 glob 源文件（不再使用 `Sources/*.swift` 通配符）

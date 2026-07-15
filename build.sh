@@ -17,11 +17,13 @@ SDK_PATH="$(xcrun --show-sdk-path --sdk macosx)"
 
 # ── Parse arguments ──
 BUILD_ALL=false
+BUILD_DMG=false
 TARGET_ARCH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --all) BUILD_ALL=true ;;
+    --dmg) BUILD_DMG=true ;;
     --arch) TARGET_ARCH="$2"; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -73,6 +75,7 @@ build_arch() {
   mkdir -p "${app_bundle}/Contents/Resources"
 
   cp "${build_dir}/${APP_NAME}"  "${app_bundle}/Contents/MacOS/"
+  chmod +x "${app_bundle}/Contents/MacOS/${APP_NAME}"
   cp "${RES_DIR}/Info.plist"     "${app_bundle}/Contents/"
 
   if [ -f "${RES_DIR}/AppIcon.icns" ]; then
@@ -87,11 +90,58 @@ for arch in "${ARCHES[@]}"; do
   build_arch "$arch"
 done
 
+# ── Package DMG for distribution ──
+package_dmg() {
+  local arch="$1"
+  local app_bundle=".build/${arch}/${APP_NAME}-${arch}.app"
+  local package_dir="${PACKAGE_DIR}/${arch}"
+  local dmg_path="${package_dir}/${APP_NAME}-${arch}.dmg"
+  local stage_dir="${PACKAGE_DIR}/dmg-staging-${arch}"
+
+  if [ ! -d "$app_bundle" ]; then
+    echo "  ⚠️  ${app_bundle} not found, skipping DMG"
+    return
+  fi
+
+  echo ""
+  echo "💿 Creating ${APP_NAME}-${arch}.dmg …"
+
+  rm -rf "$stage_dir"
+  mkdir -p "$stage_dir"
+  mkdir -p "$package_dir"
+
+  ditto "$app_bundle" "${stage_dir}/${APP_NAME}.app"
+  ln -s /Applications "$stage_dir/Applications"
+
+  rm -f "$dmg_path"
+  hdiutil create \
+    -fs HFS+ \
+    -srcfolder "$stage_dir" \
+    -format UDZO \
+    -imagekey zlib-level=9 \
+    -volname "${APP_NAME}" \
+    "$dmg_path" > /dev/null
+
+  rm -rf "$stage_dir"
+  echo "  ✅ ${dmg_path}"
+}
+
+# ── Package DMG (only in --dmg mode) ──
+if [ "$BUILD_DMG" = true ]; then
+  PACKAGE_DIR=".package"
+  for arch in "${ARCHES[@]}"; do
+    package_dmg "$arch"
+  done
+fi
+
 echo ""
 echo "═══════════════════════════════════════════"
 echo "  Done — built ${#ARCHES[@]} architecture(s)"
 for arch in "${ARCHES[@]}"; do
   echo "  .build/${arch}/${APP_NAME}-${arch}.app"
+  if [ "$BUILD_DMG" = true ]; then
+    echo "  💿 .package/${arch}/${APP_NAME}-${arch}.dmg"
+  fi
 done
 echo "═══════════════════════════════════════════"
 echo ""
@@ -100,3 +150,8 @@ echo "    open \".build/${NATIVE_ARCH}/${APP_NAME}-${NATIVE_ARCH}.app\""
 echo ""
 echo "  Copy to Applications:"
 echo "    cp -R \".build/${NATIVE_ARCH}/${APP_NAME}-${NATIVE_ARCH}.app\" /Applications/"
+if [ "$BUILD_DMG" = true ]; then
+  echo ""
+  echo "  Release DMG:"
+  echo "    .package/${NATIVE_ARCH}/${APP_NAME}-${NATIVE_ARCH}.dmg"
+fi
