@@ -1,36 +1,52 @@
 //  MenuBarManager.swift
 //  BatKill
 //
-//  Manages the NSStatusItem (menu-bar icon), the NSPopover that appears
+//  Manages the NSStatusItem (menu-bar icon), the popover panel that appears
 //  on left-click, the right-click context menu, badge rendering with a
 //  red count overlay, and brief tooltip notifications under the menu bar.
 //
 //  This is the lowest-level UI layer of BatKill. It has no knowledge of
-//  SwiftUI environment objects -- it receives views via setPopoverContent()
+//  SwiftUI environment objects — it receives views via setPopoverContent()
 //  and receives badge updates via updateBadge().
 //
 //  Architecture:
 //    - Created once by AppDelegate.applicationDidFinishLaunching()
-//    - Owns the NSStatusItem and NSPopover
+//    - Owns the NSStatusItem and an NSPanel-based popover
 //    - Routes left-click to togglePopover(), right-click to showContextMenu()
 //    - Badge rendering is done via CoreGraphics into an NSImage
 //    - Notifications are rendered as a borderless NSPanel positioned below
 //      the status-item button
+//
+//  Popover approach:
+//    Uses a custom NSPanel (not NSPopover) for the popover, manually
+//    positioned below the status-item button. This avoids NSPopover's
+//    unreliable positioning across macOS versions — the panel is placed
+//    directly using the button's window frame in screen coordinates.
+//    A local event monitor detects clicks outside the panel to dismiss it.
 
 import Cocoa
 import SwiftUI
 
 // MARK: - Menu Bar Manager
 
-/// Manages the NSStatusItem (menu-bar icon), NSPopover, badge rendering,
+/// Manages the NSStatusItem (menu-bar icon), popover panel, badge rendering,
 /// and context menu for the BatKill menu-bar agent.
 final class MenuBarManager: NSObject, ObservableObject {
 
     /// The system status item pinned to the menu bar.
     private let statusItem: NSStatusItem
 
-    /// The popover shown on left-click of the menu-bar icon.
-    private let popover = NSPopover()
+    /// Stored SwiftUI view, set once at launch.
+    private var popoverView: (any View)?
+
+    /// The popover panel and its hosting controller, created lazily on first
+    /// click and destroyed on close. Keeping either alive while hidden causes
+    /// AppKit to run display-cycle layout passes on the SwiftUI hierarchy.
+    private var popoverPanel: NSPanel? = nil
+    private var hostingController: NSHostingController<AnyView>? = nil
+
+    /// Monitors clicks outside the popover panel to dismiss it.
+    private var eventMonitor: Any?
 
     // ──────────────────────────────────────────────
     // MARK: - Rapid Click Detection (Debug Toggle)
@@ -53,11 +69,11 @@ final class MenuBarManager: NSObject, ObservableObject {
     // ──────────────────────────────────────────────
 
     /// Creates the status item and configures the button to receive
-    /// both left and right mouse events.
+    /// both left and right mouse events. The popover panel is NOT created
+    /// here — it is created lazily on the first left-click.
     override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
-        popover.behavior = .transient
         setupButton()
     }
 
@@ -76,11 +92,13 @@ final class MenuBarManager: NSObject, ObservableObject {
     // MARK: - Popover Content
     // ──────────────────────────────────────────────
 
-    /// Sets the SwiftUI view displayed inside the popover. The view is
-    /// wrapped in an NSHostingController.
+    /// Stores the SwiftUI view for later use. The `NSHostingController` is
+    /// NOT created here — it is created lazily in `togglePopover()` when the
+    /// popover is shown and destroyed when it closes. This avoids AppKit
+    /// display-cycle layout overhead on the SwiftUI hierarchy while the
+    /// popover is hidden.
     func setPopoverContent<V: View>(_ view: V) {
-        let host = NSHostingController(rootView: view)
-        popover.contentViewController = host
+        popoverView = view
     }
 
     // ──────────────────────────────────────────────
@@ -112,15 +130,112 @@ final class MenuBarManager: NSObject, ObservableObject {
         }
     }
 
-    /// Shows or hides the popover, anchored to the status-item button.
+    // ──────────────────────────────────────────────
+    // MARK: - Panel Popover (window-based, not NSPopover)
+    // ──────────────────────────────────────────────
+
+    /// Shows or hides the popover panel, anchored directly below the
+    /// status-item button using screen coordinates. The NSPanel and
+    /// NSHostingController are created on first show and destroyed on
+    /// close to avoid AppKit display-cycle overhead while hidden.
     @objc func togglePopover() {
         guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(nil)
+
+        if let panel = popoverPanel, panel.isVisible {
+            closePopoverPanel()
         } else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            showPopoverPanel(from: button)
         }
+    }
+
+    /// Creates (if needed) and shows the popover panel positioned just
+    /// below the status-item button.
+    private func showPopoverPanel(from button: NSButton) {
+        guard let view = popoverView else { return }
+
+        // ── Lazily create the panel ──
+        if popoverPanel == nil {
+            let panel = NSPanel(
+                contentRect: .zero,
+                styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.titlebarAppearsTransparent = true
+            panel.titleVisibility = .hidden
+            panel.level = .statusBar
+            panel.hasShadow = true
+            panel.isMovable = false
+            panel.collectionBehavior = [.transient, .ignoresCycle, .moveToActiveSpace]
+
+            // ── Vibrancy background (matches NSPopover look) ──
+            let effectView = NSVisualEffectView()
+            effectView.material = .hudWindow
+            effectView.state = .active
+            effectView.blendingMode = .behindWindow
+            effectView.isEmphasized = true
+            effectView.wantsLayer = true
+            effectView.layer?.cornerRadius = 10
+            effectView.layer?.masksToBounds = true
+            panel.contentView = effectView
+
+            // ── Host the SwiftUI view on top of the vibrancy ──
+            let hosting = NSHostingController(rootView: AnyView(view))
+            hosting.view.wantsLayer = true
+            effectView.addSubview(hosting.view)
+            hostingController = hosting
+
+            // Size the panel from the SwiftUI view's fitting size
+            let contentSize = hosting.view.fittingSize
+            hosting.view.frame = NSRect(origin: .zero, size: contentSize)
+            effectView.frame = NSRect(origin: .zero, size: contentSize)
+            panel.setContentSize(contentSize)
+
+            popoverPanel = panel
+
+            // ── Event monitor: close on click outside ──
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+                [weak self] event in
+                guard let self = self,
+                      let panel = self.popoverPanel,
+                      panel.isVisible
+                else { return event }
+
+                let screenPoint = NSEvent.mouseLocation
+                if !panel.frame.contains(screenPoint) {
+                    self.closePopoverPanel()
+                }
+                return event
+            }
+        }
+
+        guard let panel = popoverPanel else { return }
+
+        // ── Position the panel just below the status-item button ──
+        if let buttonWindow = button.window {
+            let btnFrame = buttonWindow.frame   // Screen coordinates of the menu-bar button
+            let panelSize = panel.frame.size
+            let panelX = btnFrame.midX - panelSize.width / 2
+            // btnFrame.minY = bottom edge of the menu bar (top of screen minus menu bar height)
+            let panelY = btnFrame.minY - panelSize.height - 6
+            panel.setFrameOrigin(NSPoint(x: panelX, y: panelY))
+        }
+
+        panel.orderFront(nil)
+        panel.makeKey()
+    }
+
+    /// Closes and destroys the popover panel, releasing all resources.
+    private func closePopoverPanel() {
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+        popoverPanel?.close()
+        popoverPanel = nil
+        hostingController = nil
     }
 
     // ──────────────────────────────────────────────
@@ -230,10 +345,10 @@ final class MenuBarManager: NSObject, ObservableObject {
     // MARK: - Show Settings Window
     // ──────────────────────────────────────────────
 
-    /// Closes the popover (if open) and posts the .showSettings notification
-    /// to tell AppDelegate to open the settings window.
+    /// Closes the popover panel (if open) and posts the .showSettings
+    /// notification to tell AppDelegate to open the settings window.
     @objc func showSettingsWindow() {
-        if popover.isShown { popover.performClose(nil) }
+        closePopoverPanel()
         NotificationCenter.default.post(name: .showSettings, object: nil)
     }
 

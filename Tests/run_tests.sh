@@ -22,8 +22,13 @@ echo ""
 
 # ── Collect source files ──
 # Main source files (needed for the types we're testing)
-# Exclude BatKillApp.swift which has @main attribute
-MAIN_SOURCES=$(find "$SRC_DIR" -name '*.swift' | grep -v 'BatKillApp.swift' | sort)
+# Exclude entry-point files (entry point is TestMain.swift)
+MAIN_SOURCES=$(find "$SRC_DIR" -name '*.swift' \
+  | grep -v 'BatKillApp.swift' \
+  | grep -v 'AppDelegate.swift' \
+  | grep -v 'Main.swift' \
+  | grep -v 'main.swift' \
+  | sort)
 
 # Test source files
 TEST_SOURCES=$(find "$TEST_DIR/Sources" -name '*.swift' | sort)

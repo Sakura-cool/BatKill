@@ -2,8 +2,8 @@
 //  BatKill
 //
 //  The compact popover panel shown when the user left-clicks the menu-bar
-//  icon. Displays the current power status, a badge count, quick action
-//  buttons (Kill Now / Settings), a language picker, and a summary line.
+//  icon. Displays the current power status, a badge count, and a quick
+//  "Kill Now" button.
 //
 //  This is NOT the full settings window -- it is a lightweight status
 //  dashboard. The full settings panel is hosted by SettingsView in a
@@ -13,15 +13,14 @@
 //    - Hosted inside an NSPopover by MenuBarManager
 //    - Receives BatteryMonitor, AppLister, ProcessKiller, and
 //      LocalizationManager as ObservedObjects (not EnvironmentObjects)
-//    - "Settings" button posts .showSettings notification, which
-//      AppDelegate handles by opening the SettingsView window
+//    - Full settings panel is opened via right-click → "Show Window"
 
 import SwiftUI
 
 // MARK: - Popover Content (shown from menu bar)
 
 /// Compact status popover displayed on left-click of the menu-bar icon.
-/// Shows power state, badge count, quick actions, and language switcher.
+/// Shows power state, badge count, and a quick "Kill Now" button.
 struct PopoverView: View {
 
     // MARK: - Observed Objects
@@ -82,40 +81,19 @@ struct PopoverView: View {
                 }
             }
 
-            // ── Quick Actions ──
-            // "Kill Now" (immediate) and "Settings" (opens full panel)
-            HStack(spacing: 8) {
-                Button {
-                    processKiller.killSelected(appLister.apps) { appLister.refreshAppList() }
-                } label: {
-                    Label(lm.translate("Kill Now", "立即停止"), systemImage: "bolt.fill")
-                        .font(.caption)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .disabled(processKiller.isKilling
-                    || !appLister.apps.contains(where: { $0.isSelected && $0.isRunning }))
-
-                Button {
-                    NotificationCenter.default.post(name: .showSettings, object: nil)
-                } label: {
-                    Label(lm.translate("Settings", "设置"), systemImage: "gearshape")
-                        .font(.caption)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+            // ── Quick Action ──
+            // "Kill Now" button for immediate kill
+            Button {
+                processKiller.killSelected(appLister.apps) { appLister.refreshAppList() }
+            } label: {
+                Label(lm.translate("Kill Now", "立即停止"), systemImage: "bolt.fill")
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
             }
-
-            // ── Language Picker ──
-            // Segmented control to switch between English and Chinese
-            Picker("", selection: $lm.currentLanguage) {
-                ForEach(Language.allCases, id: \.self) { lang in
-                    Text(lang.displayName).tag(lang)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 200)
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+            .disabled(processKiller.isKilling
+                || !appLister.apps.contains(where: { $0.isSelected && $0.isRunning }))
 
             // ── Status Info ──
             // Total app count and running count summary

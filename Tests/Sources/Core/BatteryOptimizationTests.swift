@@ -19,18 +19,18 @@ struct BatteryOptimizationTests: TestCase {
         runTest("hardwareRefreshInterval on AC power") {
             let interval = hardwareRefreshInterval(onBattery: false)
             #if arch(x86_64)
-            XCTAssertEqual(interval, 4.0, "x86_64 refresh on AC should be 4s")
+            XCTAssertEqual(interval, 1.2, "x86_64 per-tick interval on AC should be 1.2s")
             #else
-            XCTAssertEqual(interval, 2.0, "arm64 refresh on AC should be 2s")
+            XCTAssertEqual(interval, 1.0, "arm64 per-tick interval on AC should be 1.0s")
             #endif
         }
 
         runTest("hardwareRefreshInterval on battery") {
             let interval = hardwareRefreshInterval(onBattery: true)
             #if arch(x86_64)
-            XCTAssertEqual(interval, 6.0, "x86_64 refresh on battery should be 6s")
+            XCTAssertEqual(interval, 2.5, "x86_64 per-tick interval on battery should be 2.5s")
             #else
-            XCTAssertEqual(interval, 3.0, "arm64 refresh on battery should be 3s")
+            XCTAssertEqual(interval, 2.0, "arm64 per-tick interval on battery should be 2.0s")
             #endif
         }
 

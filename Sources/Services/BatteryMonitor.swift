@@ -2,9 +2,10 @@
 //  BatKill
 //
 //  Monitors the Mac's power source via IOKit, publishing battery/AC state
-//  changes to drive automatic app kill/restore behavior. Uses both an
-//  IOKit notification callback for instant detection and a 5-second poll
-//  timer as a safety net.
+//  changes to drive automatic app kill/restore behavior. Uses the IOKit
+//  notification callback (`IOPSNotificationCreateRunLoopSource`) for
+//  instant detection. No polling timer — IOKit notifications are reliable
+//  on modern macOS and periodic polling only adds CPU spikes.
 //
 //  Note: The `logger()` function used throughout is defined in Core/Logger.swift.
 
@@ -19,10 +20,10 @@ import Combine
 /// - `powerSource`: Display string ("Battery" or "AC Power").
 /// - `batteryPercentage`: Current charge level (0-100).
 ///
-/// Dual detection strategy:
-/// 1. IOKit notification callback (`IOPSNotificationCreateRunLoopSource`)
-///    fires immediately when the power source changes.
-/// 2. A 5-second polling timer catches any missed notifications.
+/// Detection: IOKit notification callback (`IOPSNotificationCreateRunLoopSource`)
+/// fires immediately when the power source changes. No polling timer — the
+/// notification is instant and reliable on modern macOS, and periodic polling
+/// would only add unnecessary CPU spikes.
 final class BatteryMonitor: ObservableObject {
     /// Whether the Mac is currently running on battery power.
     @Published var isOnBattery: Bool = false
@@ -33,50 +34,27 @@ final class BatteryMonitor: ObservableObject {
     /// Current battery charge percentage (0.0 - 100.0).
     @Published var batteryPercentage: Double = 0
 
-    /// Safety-net polling timer for power state checks.
-    private var timer: Timer?
-
     /// IOKit run loop source for power source change notifications.
+    /// This is the PRIMARY detection mechanism. No polling timer is used
+    /// because `IOPSNotificationCreateRunLoopSource` is instant and
+    /// reliable on modern macOS, and any periodic IOKit PS call overhead
+    /// shows up as CPU spikes that cause stutter in other apps.
     private var notificationSource: CFRunLoopSource?
-
-    /// Poll interval on AC power (fast, low overhead).
-    private let acPollInterval: TimeInterval = 5
-
-    /// Poll interval on battery (reduced to save power).
-    private let batteryPollInterval: TimeInterval = 15
 
     // MARK: - Initialization
 
-    /// Performs an initial power state check, registers the IOKit
-    /// notification callback, and starts the polling timer.
+    /// Performs an initial power state check and registers the IOKit
+    /// notification callback. No polling timer — IOKit notifications
+    /// alone are sufficient and introduce zero periodic CPU overhead.
     init() {
         checkPowerState()
         registerIOKitCallback()
-        // Start with the AC interval; checkPowerState() above already set
-        // isOnBattery, so adjustPollInterval() below corrects it immediately.
-        timer = Timer.scheduledTimer(withTimeInterval: acPollInterval, repeats: true) { [weak self] _ in
-            self?.checkPowerState()
-        }
-        // Correct the interval now that we know the initial power state
-        adjustPollInterval()
     }
 
-    /// Cleans up the timer and removes the IOKit run loop source.
+    /// Removes the IOKit run loop source on dealloc.
     deinit {
-        timer?.invalidate()
         if let source = notificationSource {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
-        }
-    }
-
-    /// Adjusts the polling timer interval based on the current power source.
-    /// Polls less frequently on battery to reduce CPU/IOKit overhead.
-    private func adjustPollInterval() {
-        let interval = isOnBattery ? batteryPollInterval : acPollInterval
-        guard timer?.timeInterval != interval else { return }
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.checkPowerState()
         }
     }
 
@@ -99,7 +77,6 @@ final class BatteryMonitor: ObservableObject {
                 if isOnBattery != onBattery {
                     logger("⚡ isOnBattery changed: \(self.isOnBattery) → \(onBattery)")
                     isOnBattery = onBattery
-                    adjustPollInterval()
                 } else {
                     debugLog("IOKit state=\(state) → onBattery=\(onBattery)")
                 }

@@ -30,6 +30,10 @@ import UserNotifications
 
 /// The NSApplicationDelegate that owns every subsystem and orchestrates
 /// power-state transitions, window management, and badge updates.
+///
+/// Entry point is main.swift (not @main on this class) to avoid SwiftUI's
+/// `App` protocol, which creates a persistent scene view graph that AppKit
+/// renders in display cycles even when idle (~2-6% CPU).
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Subsystem References
@@ -186,6 +190,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 6. Subscribe to state changes for badge and power actions.
         observeStateChanges()
+
+        // 7. If launched with --diagnose-fan, auto-open the Temperature window
+        //    and start logging CPU usage so we can measure the impact of
+        //    having the hardware monitor window open with fan controls visible.
+        if CommandLine.arguments.contains("--diagnose-fan") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.diagnoseFan()
+            }
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -262,6 +275,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate()
         } else {
             NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // MARK: - Diagnose Mode
+    // ──────────────────────────────────────────────
+
+    /// Launched via `--diagnose-fan`. Opens the Temperature window, sets
+    /// the fan to a manual speed (simulating user adjustment), and logs
+    /// BatKill's CPU usage every 5 seconds.
+    private func diagnoseFan() {
+        showTemperatureWindow()
+        logger("=== DIAGNOSE: Temperature window opened ===")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            guard let self = self else { return }
+            logger("=== DIAGNOSE: Starting baseline CPU log ===")
+            self.startCPULogging(phase: "baseline")
+
+            // After 10s of baseline, set the fan to manual + speed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                self.setFanForDiagnose()
+            }
+        }
+    }
+
+    /// Attempts to set fan to manual mode at 50% max speed. Logs success
+    /// or failure. Admin auth dialog may appear.
+    private func setFanForDiagnose() {
+        guard !hardwareMonitor.fans.isEmpty else {
+            logger("=== DIAGNOSE: No fans found, skipping fan adjustment ===")
+            return
+        }
+
+        logger("=== DIAGNOSE: Setting fan speed... ===")
+        if hardwareMonitor.requestAdminAuth() {
+            for fan in hardwareMonitor.fans {
+                let speed = fan.maxSpeed * 0.5
+                hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
+                    logger("DIAGNOSE: Fan[\(fan.index)] mode→manual: \(ok)")
+                }
+                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
+                    logger("DIAGNOSE: Fan[\(fan.index)] speed→\(Int(speed)): \(ok)")
+                }
+            }
+            // After fan adjustment, wait and start post-adjustment CPU log
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                self?.menuBarManager?.showBriefNotification("DIAGNOSE: fan set. Check CPU in log.", duration: 5)
+                self?.startCPULogging(phase: "after-fan")
+            }
+        } else {
+            logger("=== DIAGNOSE: Admin auth denied or failed ===")
+        }
+    }
+
+    /// Runs `ps` every 5 seconds in the background and logs BatKill's
+    /// CPU percentage to the file log. `phase` labels the log entries.
+    private func startCPULogging(phase: String) {
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            let logInterval: TimeInterval = 5.0
+            var iteration = 0
+            while self != nil {
+                iteration += 1
+                let pid = ProcessInfo.processInfo.processIdentifier
+
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/bin/ps")
+                task.arguments = ["-p", "\(pid)", "-o", "%cpu=%MEM="]
+
+                let pipe = Pipe()
+                task.standardOutput = pipe
+
+                do {
+                    try task.run()
+                    task.waitUntilExit()
+
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                    if !output.isEmpty {
+                        logger("DIAGNOSE [\(phase) #\(iteration)] CPU=\(output)%")
+                    }
+                } catch {
+                    logger("DIAGNOSE: ps failed: \(error.localizedDescription)")
+                }
+
+                Thread.sleep(forTimeInterval: logInterval)
+            }
         }
     }
 
@@ -387,5 +488,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.powerActionContext?.log("冷却结束，处理下一个操作")
             self.processNextPowerAction()
         }
+        powerDelayTimer?.tolerance = 5.0
     }
 }

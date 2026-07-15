@@ -100,7 +100,8 @@ extension HardwareMonitor {
 
     /// Cached list of SMC keys that exist on this hardware.
     /// Populated on first read, then reused for subsequent reads.
-    private static var validTempKeysCache: [(key: String, name: String, category: TemperatureCategory)]?
+    /// `internal` visibility for `partialRefresh()` in HardwareMonitor.swift.
+    static var validTempKeysCache: [(key: String, name: String, category: TemperatureCategory)]?
 
     func readTemperatures() -> [TemperatureSensor] {
         var seen = Set<String>()
@@ -152,7 +153,7 @@ extension HardwareMonitor {
             || dataType == HardwareMonitor.fp1aType
     }
 
-    private func readTempSensor(key: String, name: String, category: TemperatureCategory) -> TemperatureSensor? {
+    func readTempSensor(key: String, name: String, category: TemperatureCategory) -> TemperatureSensor? {
         guard let data = readKeyData(key) else { return nil }
         guard isTempType(data.dataType) else { return nil }
         return decodeTempFromData(data, key: key, name: name, category: category)

@@ -58,7 +58,13 @@ final class HardwareMonitor: ObservableObject {
     // MARK: Callbacks
 
     /// Called once when `thermalThrottled` transitions from false to true.
+    /// Called when CPU temperature first exceeds the threshold.
+    /// The handler should release fan control to the system (auto mode).
     var onThermalThrottle: (() -> Void)?
+
+    /// Called when CPU temperature drops back below the threshold.
+    /// The handler should restore the user's previous fan settings.
+    var onThermalCooldown: (() -> Void)?
 
     // MARK: SMC Type Constants
 
@@ -89,6 +95,28 @@ final class HardwareMonitor: ObservableObject {
     /// IOKit connection handle to the AppleSMC service.
     private var connection: io_connect_t = 0
 
+    /// Cache of SMC key metadata (type, data size) keyed by 4-char key string.
+    /// Key metadata never changes at runtime, so we query it once per key then
+    /// reuse. This eliminates one IOConnectCallStructMethod per key per read.
+    private var keyInfoCache: [String: SMCKeyInfoData] = [:]
+
+    /// Guards against overlapping `refresh()` calls. Set to `true` before
+    /// dispatching to the background queue and reset to `false` on the main
+    /// thread after publishing. Timer ticks that arrive during a slow SMC
+    /// read cycle are silently skipped.
+    private var isRefreshing = false
+
+    /// Cursor into `validTempKeysCache`. Each `partialRefresh()` call reads
+    /// exactly ONE key at this index, advancing by 1. When the cursor wraps
+    /// past the last key, accumulated results are published as a batch and
+    /// the cycle restarts.
+    private var tempCursor = 0
+
+    /// Accumulator for staggered temperature reads. `partialRefresh()` adds
+    /// each sensor reading here. At cycle end (cursor wraps), the full batch
+    /// is published and the accumulator is reset.
+    private var tempAccumulator: [TemperatureSensor] = []
+
     /// Static reference to the authorization object for admin SMC writes.
     /// Persists for the lifetime of the process once granted.
     static var authRef: AuthorizationRef?
@@ -116,15 +144,11 @@ final class HardwareMonitor: ObservableObject {
 
     // MARK: - Initialization
 
-    /// Opens the SMC connection and performs an initial data refresh.
-    /// The refresh() method handles background SMC reads and main-thread
-    /// publishing for @Published thread-safety.
+    /// Does NOT open the SMC connection eagerly. SMC is opened lazily
+    /// on the first read/write operation. This avoids IOKit overhead
+    /// for users who only use BatKill for power management and never
+    /// open the hardware monitor window.
     init() {
-        open()
-        if connection != 0 {
-            isAvailable = true
-            refresh()
-        }
     }
 
     /// Closes the SMC connection on deallocation.
@@ -152,8 +176,15 @@ final class HardwareMonitor: ObservableObject {
     /// Reads SMC on a background queue to avoid blocking the main thread,
     /// then publishes results on the main thread for @Published safety.
     ///
-    /// Called after init, on a 2s timer, and after fan writes.
+    /// Guarded by `isRefreshing` to skip overlapping calls when the timer
+    /// fires before a slow SMC read completes.
+    ///
+    /// Called after init and after fan write operations (full data needed).
     func refresh() {
+        lazyEnsureOpen()
+        guard connection != 0 else { return }
+        if isRefreshing { return }
+        isRefreshing = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             let temps = self.readTemperatures()
@@ -164,22 +195,102 @@ final class HardwareMonitor: ObservableObject {
                 self.temperatures = temps
                 self.fans = fans
                 self.maxCPUTemp = maxTemp
+                self.isRefreshing = false
+            }
+        }
+    }
+
+    /// Staggered temperature read: reads exactly ONE SMC temperature key
+    /// per call, spreading ~15-25 kernel traps across ~8 seconds instead of
+    /// firing them all in one 50ms burst. The timer calls this every 400ms.
+    ///
+    /// At cycle end (cursor wraps past last key), accumulated results are
+    /// batch-published to SwiftUI for a single render pass.
+    ///
+    /// Falls back to a full `readTemperatures()` scan if the key cache has
+    /// not been populated yet (first call after launch).
+    func partialRefresh() {
+        lazyEnsureOpen()
+        guard connection != 0 else { return }
+        if isRefreshing { return }
+        isRefreshing = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+
+            guard let keys = HardwareMonitor.validTempKeysCache, !keys.isEmpty else {
+                // Cache not yet populated — do a full scan to initialize it
+                let temps = self.readTemperatures()
+                let cachedFans = self.fans
+                DispatchQueue.main.async {
+                    self.temperatures = temps
+                    self.fans = cachedFans
+                    self.isRefreshing = false
+                }
+                return
+            }
+
+            let idx = self.tempCursor
+            let item = keys[idx]
+
+            if let sensor = self.readTempSensor(key: item.key, name: item.name, category: item.category) {
+                if let existing = self.tempAccumulator.firstIndex(where: { $0.key == sensor.key }) {
+                    self.tempAccumulator[existing] = sensor
+                } else {
+                    self.tempAccumulator.append(sensor)
+                }
+            }
+
+            self.tempCursor = (idx + 1) % keys.count
+
+            if self.tempCursor == 0 {
+                // Full cycle complete: publish accumulated temps + recompute aggregate
+                let pCoreTemps = self.tempAccumulator
+                    .filter { $0.name.hasPrefix("CPU P-Core ") && !$0.name.contains("Aggregate") }
+                    .map(\.temperature)
+                let maxTemp = pCoreTemps.max() ?? 0
+                let cachedFans = self.fans
+                let batch = self.tempAccumulator
+
+                self.tempAccumulator = []
+
+                DispatchQueue.main.async {
+                    self.temperatures = batch
+                    self.fans = cachedFans
+                    self.maxCPUTemp = maxTemp
+                    self.isRefreshing = false
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.isRefreshing = false
+                }
             }
         }
     }
 
     /// Checks whether the maximum CPU temperature meets or exceeds the
-    /// given threshold. If the threshold is newly exceeded, fires
-    /// `onThermalThrottle` exactly once.
+    /// given threshold. Fires `onThermalThrottle` when the threshold is
+    /// newly exceeded, and `onThermalCooldown` when the CPU cools back
+    /// below it.
     func checkThreshold(_ threshold: Double) {
         let wasThrottled = thermalThrottled
         thermalThrottled = maxCPUTemp >= threshold
         if thermalThrottled && !wasThrottled {
             onThermalThrottle?()
+        } else if !thermalThrottled && wasThrottled {
+            onThermalCooldown?()
         }
     }
 
     // MARK: - SMC Connection Lifecycle
+
+    /// Ensures the SMC connection is open. Call this before every
+    /// read/write operation. No-op if already connected.
+    /// Sets `isAvailable` based on connection success.
+    private func lazyEnsureOpen() {
+        guard connection == 0 else { return }
+        open()
+        isAvailable = connection != 0
+    }
 
     /// Opens a connection to the AppleSMC IOKit driver.
     /// Sets `connection` to 0 on failure (no SMC available).
@@ -221,31 +332,52 @@ final class HardwareMonitor: ObservableObject {
 
     /// Reads the full key info and value for a 4-character SMC key.
     /// Returns `nil` if the key does not exist or the IOKit call fails.
+    ///
+    /// Optimisation: key metadata (type, data size) is cached after the first
+    /// read since it never changes at runtime. This eliminates the `kSMCGetKeyInfo`
+    /// IOConnect call (~50% of per-key kernel traps) on subsequent reads.
     internal func readKeyData(_ key: String) -> KeyData? {
+        lazyEnsureOpen()
+        guard connection != 0 else { return nil }
         guard let fourChar = keyToFourCharCode(key) else { return nil }
 
-        // Step 1: Query key metadata (type, size) via GetKeyInfo
-        var input = SMCParamStruct()
-        input.key = fourChar
-        input.data8 = kSMCGetKeyInfo
+        // Step 1: Query key metadata — use cache if available
+        let info: SMCKeyInfoData
+        if let cached = keyInfoCache[key] {
+            info = cached
+        } else {
+            var getInput = SMCParamStruct()
+            getInput.key = fourChar
+            getInput.data8 = kSMCGetKeyInfo
 
-        var output = SMCParamStruct()
-        var outSize = MemoryLayout<SMCParamStruct>.size
+            var getOutput = SMCParamStruct()
+            var outSize = MemoryLayout<SMCParamStruct>.size
 
-        var kr = IOConnectCallStructMethod(connection, 2, &input, MemoryLayout<SMCParamStruct>.size, &output, &outSize)
-        guard kr == kIOReturnSuccess else { return nil }
+            let kr = IOConnectCallStructMethod(
+                connection, 2,
+                &getInput, MemoryLayout<SMCParamStruct>.size,
+                &getOutput, &outSize
+            )
+            guard kr == kIOReturnSuccess else { return nil }
+            guard getOutput.keyInfo.dataSize > 0, getOutput.keyInfo.dataSize <= 32 else { return nil }
 
-        let info = output.keyInfo
-        guard info.dataSize > 0, info.dataSize <= 32 else { return nil }
+            info = getOutput.keyInfo
+            keyInfoCache[key] = info
+        }
 
-        // Step 2: Read the actual value using the metadata from step 1
+        // Step 2: Read the actual value using the (cached or just-fetched) metadata
         var readInput = SMCParamStruct()
         readInput.key = fourChar
         readInput.keyInfo = info
         readInput.data8 = kSMCReadKey
 
         var readOutput = SMCParamStruct()
-        kr = IOConnectCallStructMethod(connection, 2, &readInput, MemoryLayout<SMCParamStruct>.size, &readOutput, &outSize)
+        var outSize = MemoryLayout<SMCParamStruct>.size
+        let kr = IOConnectCallStructMethod(
+            connection, 2,
+            &readInput, MemoryLayout<SMCParamStruct>.size,
+            &readOutput, &outSize
+        )
         guard kr == kIOReturnSuccess else { return nil }
 
         // Copy the raw bytes from the output struct's 32-byte buffer
@@ -263,26 +395,41 @@ final class HardwareMonitor: ObservableObject {
         return readKeyData(key)?.bytes
     }
 
-    /// Writes raw bytes to an SMC key. First queries key info for the
-    /// required metadata, then writes the provided data.
+    /// Writes raw bytes to an SMC key. Uses the cached key metadata
+    /// if available (from a previous read), otherwise queries and caches it.
+    /// This eliminates one IOConnectCallStructMethod per key when the
+    /// metadata was already cached by a prior readKeyData() call.
     internal func writeBytes(key: String, bytes: UnsafeRawPointer, length: Int) -> Bool {
+        lazyEnsureOpen()
+        guard connection != 0 else { return false }
         guard let fourChar = keyToFourCharCode(key) else { return false }
 
-        // Query key metadata first
-        var input = SMCParamStruct()
-        input.key = fourChar
-        input.data8 = kSMCGetKeyInfo
+        // Use cached key metadata if available (avoids redundant IOConnect call)
+        let info: SMCKeyInfoData
+        if let cached = keyInfoCache[key] {
+            info = cached
+        } else {
+            var getInput = SMCParamStruct()
+            getInput.key = fourChar
+            getInput.data8 = kSMCGetKeyInfo
 
-        var output = SMCParamStruct()
-        var outSize = MemoryLayout<SMCParamStruct>.size
+            var getOutput = SMCParamStruct()
+            var outSize = MemoryLayout<SMCParamStruct>.size
 
-        var kr = IOConnectCallStructMethod(connection, 2, &input, MemoryLayout<SMCParamStruct>.size, &output, &outSize)
-        guard kr == kIOReturnSuccess else { return false }
+            let kr = IOConnectCallStructMethod(
+                connection, 2,
+                &getInput, MemoryLayout<SMCParamStruct>.size,
+                &getOutput, &outSize
+            )
+            guard kr == kIOReturnSuccess else { return false }
+            info = getOutput.keyInfo
+            keyInfoCache[key] = info
+        }
 
-        // Write data using the key info from the query
+        // Write data using the (cached or just-fetched) key info
         var writeInput = SMCParamStruct()
         writeInput.key = fourChar
-        writeInput.keyInfo = output.keyInfo
+        writeInput.keyInfo = info
         writeInput.data8 = kSMCWriteKey
 
         withUnsafeMutableBytes(of: &writeInput.bytes) { ptr in
@@ -291,8 +438,10 @@ final class HardwareMonitor: ObservableObject {
             }
         }
 
-        kr = IOConnectCallStructMethod(connection, 2, &writeInput, MemoryLayout<SMCParamStruct>.size, &output, &outSize)
-        return kr == kIOReturnSuccess
+        var output = SMCParamStruct()
+        var outSize = MemoryLayout<SMCParamStruct>.size
+        let writeKr = IOConnectCallStructMethod(connection, 2, &writeInput, MemoryLayout<SMCParamStruct>.size, &output, &outSize)
+        return writeKr == kIOReturnSuccess
     }
 
     // MARK: - Four-Char Code Helpers

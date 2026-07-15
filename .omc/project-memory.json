@@ -1,0 +1,11 @@
+{
+  "techStack": "Swift 5 / SwiftUI / AppKit / IOKit / Combine / AuthorizationServices\nTarget: macOS 14.0+ (arm64 + x86_64)\nBundle ID: com.batkill.app\nZero external dependencies, pure swiftc compilation",
+  "version": "v0.0.18",
+  "build": "bash build.sh (arm64) or manual swiftc -target x86_64-apple-macosx14.0 (x86_64)\nswiftc flags: -parse-as-library -O -whole-module-optimization\nFrameworks: SwiftUI, AppKit, IOKit, UserNotifications, ServiceManagement, Combine\nOutput: .build/BatKill.app (arm64) → Releases/arm64/BatKill-arm.app\nx86_64 binary → Releases/x86_64/BatKill-x86.app with manual .app bundling",
+  "conventions": "No Xcode project (swiftc only)\n@main struct BatKillApp (SwiftUI App, Parse-as-library)\nLSUIElement = true (menu bar only, no Dock icon)\nAll user-facing text uses LocalizationManager.translate(en, zh)\nFile log at /tmp/batkill.log\nPower action queue with debounce (pendingPowerAction merging) + cooldown (30s)\nAdmin auth via AuthorizationServices (dlsym dynamic load for deprecated API)",
+  "batteryOptimization": "BatteryMonitor: adaptive poll interval (5s AC / 15s battery), adjustPollInterval() called on state change\nHardwareMonitor: @Published var isRunningOnBattery flag, synced from AppDelegate\nTemperatureView: battery-aware SMC refresh timer via makeRefreshTimer(onBattery:), dynamically reacts via .onReceive\nRefresh intervals: arm64 2s AC / 3s battery, x86_64 4s AC / 6s battery\nExtracted into file-level functions: hardwareRefreshInterval(onBattery:), batteryPollInterval(onBattery:)",
+  "authDialogFix": "HardwareMonitor: authDenied + authInProgress static flags, resetAuthDenied()\nFanController.requestAdminAuth(): three-state gate — single instance, denial tracking, never auto-retrigger\nTemperatureView.onAppear: no auto-preset-apply when preset requires auth\nDenial resets triggered by explicit user actions only (Authorize Admin button tap, preset tap)",
+  "testing": "Lightweight custom test framework (Tests/Sources/Core/TestFramework.swift)\nRun via: bash Tests/run_tests.sh\nTest count: 164/166 passed (2 pre-existing FanPresetStore failures)\nNew tests: BatteryOptimizationTests (6 cases) — hardwareRefreshInterval AC/battery, batteryPollInterval AC/battery, battery-greater-than-AC invariant",
+  "lastScanned": 1784083988248,
+  "projectRoot": "/Users/admin/Desktop/BatKill"
+}

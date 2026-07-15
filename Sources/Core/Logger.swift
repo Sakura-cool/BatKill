@@ -31,14 +31,8 @@ final class LogQueue {
     /// Buffer for pending log messages.
     private var buffer: [String] = []
     
-    /// Timer for periodic flush.
-    private var flushTimer: Timer?
-    
     /// Maximum number of messages before auto-flush.
     private let maxBufferSize = 10
-    
-    /// Maximum time (seconds) between flushes.
-    private let flushInterval: TimeInterval = 5.0
     
     /// Log file path.
     private let logPath = "/tmp/batkill.log"
@@ -46,24 +40,10 @@ final class LogQueue {
     /// Whether the queue is currently flushing.
     private var isFlushing = false
     
-    private init() {
-        startFlushTimer()
-    }
+    private init() {}
     
     deinit {
-        flushTimer?.invalidate()
         flush() // Final flush on dealloc
-    }
-    
-    /// Starts the periodic flush timer.
-    private func startFlushTimer() {
-        flushTimer = Timer.scheduledTimer(withTimeInterval: flushInterval, repeats: true) { [weak self] _ in
-            self?.flush()
-        }
-        // Keep timer running during UI tracking
-        if let timer = flushTimer {
-            RunLoop.current.add(timer, forMode: .common)
-        }
     }
     
     /// Adds a message to the buffer. Triggers flush if buffer is full.
@@ -207,7 +187,7 @@ final class LogContext {
     let startTime: Date
     
     /// Parent operation name (for nested contexts).
-    private let parentName: String?
+    let parentName: String?
     
     /// Creates a new operation context.
     /// - Parameters:
@@ -256,7 +236,8 @@ final class LogContext {
     /// - Parameter childName: Name of the child operation.
     /// - Returns: A new LogContext with this operation as parent.
     func child(_ childName: String) -> LogContext {
-        return LogContext(name: childName, parent: name)
+        let fullParent = parentName != nil ? "\(parentName!)→\(name)" : name
+        return LogContext(name: childName, parent: fullParent)
     }
     
     /// Formats a time interval into a human-readable string.

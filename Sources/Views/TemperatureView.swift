@@ -63,6 +63,11 @@ struct TemperatureView: View {
     /// Per-fan flags indicating admin authorization is needed before writing.
     @State private var fanNeedsAdmin: [Int: Bool] = [:]
 
+    /// Snapshot of fan states saved before thermal throttling, so they
+    /// can be restored when the CPU cools back below the threshold.
+    @State private var savedFanModes: [Int: Bool] = [:]
+    @State private var savedFanSpeeds: [Int: Double] = [:]
+
     /// Timer that refreshes sensor data every second.
     @State private var refreshTimer: Timer?
 
@@ -133,6 +138,9 @@ struct TemperatureView: View {
             // Set up thermal throttle callback to auto-release fans
             hardwareMonitor.onThermalThrottle = {
                 guard hardwareMonitor.isAdminAuthorized else { return }
+                // Save current fan states so they can be restored on cooldown
+                savedFanModes = fanManualModes
+                savedFanSpeeds = fanPendingSpeeds
                 var speeds: [Int: Double] = [:]
                 var modes: [Int: Bool] = [:]
                 for fan in hardwareMonitor.fans {
@@ -142,6 +150,25 @@ struct TemperatureView: View {
                 let auto = FanPreset(id: FanPreset.autoModeID, name: "Auto", fanSpeeds: speeds, fanAutoModes: modes)
                 presetStore.update(auto)
                 executePreset(auto)
+            }
+            // Set up thermal cooldown callback to restore user settings
+            hardwareMonitor.onThermalCooldown = {
+                guard hardwareMonitor.isAdminAuthorized else { return }
+                guard !savedFanModes.isEmpty else { return }
+                // Restore the manual modes and speeds that were active before throttle
+                for fan in hardwareMonitor.fans {
+                    let idx = fan.index
+                    if let wasManual = savedFanModes[idx] {
+                        hardwareMonitor.setFanModeWithAdmin(fanIndex: idx, auto: !wasManual) { _ in }
+                    }
+                    if let speed = savedFanSpeeds[idx] {
+                        hardwareMonitor.setFanSpeedWithAdmin(fanIndex: idx, speed: speed) { _ in }
+                    }
+                }
+                // Re-activate the last user preset if it exists and is not auto
+                if let active = presetStore.activePreset, active.id != FanPreset.autoModeID {
+                    executePreset(active)
+                }
             }
             // Start the refresh timer with a battery-aware interval
             refreshTimer = makeRefreshTimer(onBattery: hardwareMonitor.isRunningOnBattery)
@@ -887,21 +914,26 @@ struct TemperatureView: View {
         return .red
     }
 
-    /// Creates a repeating timer that refreshes hardware data. The interval
-    /// varies by architecture AND power source to conserve battery life.
+    /// Creates a repeating timer that calls `partialRefresh()` to read
+    /// exactly ONE SMC temperature key per tick. Each tick does only 1
+    /// kernel trap instead of ~15-25, spreading the work across the full
+    /// refresh cycle (~6-8s). This eliminates the burst CPU spike that
+    /// caused stutter in other apps.
     ///
-    /// |              | Apple Silicon | Intel x86_64 |
-    /// |--------------|--------------|--------------|
-    /// | AC Power     |  2s          |  4s          |
-    /// | Battery      |  3s          |  6s          |
+    /// The interval varies by architecture and power source. Timer tolerance
+    /// is set to 10% of the interval so the system can coalesce wake-ups
+    /// with other system timers, reducing CPU usage.
     private func makeRefreshTimer(onBattery: Bool) -> Timer {
-        let base = hardwareRefreshInterval(onBattery: onBattery)
-        return Timer.scheduledTimer(withTimeInterval: base, repeats: true) { _ in
-            hardwareMonitor.refresh()
+        let tick = hardwareRefreshInterval(onBattery: onBattery)
+        let timer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak hardwareMonitor, weak thresholdStore] _ in
+            guard let hardwareMonitor, let thresholdStore else { return }
+            hardwareMonitor.partialRefresh()
             DispatchQueue.main.async {
                 hardwareMonitor.checkThreshold(thresholdStore.threshold)
             }
         }
+        timer.tolerance = tick * 0.1
+        return timer
     }
 }
 
@@ -911,15 +943,19 @@ struct TemperatureView: View {
 /// architecture and power source. Polls less frequently on battery
 /// to reduce SMC/IOKit overhead.
 ///
+/// Per-tick interval for staggered SMC reads. Each tick reads ONE sensor
+/// key. With ~15-20 keys, a full refresh cycle takes interval × keyCount
+/// seconds (~6-8s on AC, ~10-14s on battery).
+///
 /// |              | Apple Silicon | Intel x86_64 |
 /// |--------------|--------------|--------------|
-/// | AC Power     |  2s          |  4s          |
-/// | Battery      |  3s          |  6s          |
+/// | AC Power     |  1.0s        |  1.2s        |
+/// | Battery      |  2.0s        |  2.5s        |
 func hardwareRefreshInterval(onBattery: Bool) -> TimeInterval {
     #if arch(x86_64)
-    return onBattery ? 6.0 : 4.0
+    return onBattery ? 2.5 : 1.2
     #else
-    return onBattery ? 3.0 : 2.0
+    return onBattery ? 2.0 : 1.0
     #endif
 }
 

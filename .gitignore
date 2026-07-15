@@ -1,6 +1,7 @@
 # Build artifacts
 .build/
-BatKill.app/
+.build-x86/
+Tests/.build/
 *.o
 *.d
 
@@ -11,6 +12,3 @@ BatKill.app/
 
 # Temp
 */Icon/Sources/.build/
-
-# Cross-compile build
-.build-x86/
