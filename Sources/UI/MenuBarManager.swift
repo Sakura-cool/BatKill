@@ -195,19 +195,28 @@ final class MenuBarManager: NSObject, ObservableObject {
 
             popoverPanel = panel
 
-            // ── Event monitor: close on click outside ──
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+            // ── Event monitor: close on click outside (global) ──
+            eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
                 [weak self] event in
                 guard let self = self,
                       let panel = self.popoverPanel,
-                      panel.isVisible
-                else { return event }
+                      panel.isVisible,
+                      let button = self.statusItem.button,
+                      let btnWindow = button.window
+                else { return }
 
                 let screenPoint = NSEvent.mouseLocation
-                if !panel.frame.contains(screenPoint) {
-                    self.closePopoverPanel()
+
+                // Don't close if click is on the status item button itself
+                let btnFrame = btnWindow.frame
+                let isOnButton = btnFrame.contains(screenPoint)
+                let isOnPanel = panel.frame.contains(screenPoint)
+
+                if !isOnButton && !isOnPanel {
+                    DispatchQueue.main.async {
+                        self.closePopoverPanel()
+                    }
                 }
-                return event
             }
         }
 

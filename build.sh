@@ -4,9 +4,8 @@
 # Compiles the SwiftUI macOS app and bundles it as .app
 #
 # Usage:
-#   bash build.sh                  # Build for current architecture
-#   bash build.sh --all            # Build for both arm64 + x86_64
-#   bash build.sh --arch x86_64    # Cross-compile for specific arch
+#   bash build.sh                  # Build for both arm64 + x86_64
+#   bash build.sh --arch x86_64    # Build for specific arch only
 # ────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -16,13 +15,11 @@ RES_DIR="Resources"
 SDK_PATH="$(xcrun --show-sdk-path --sdk macosx)"
 
 # ── Parse arguments ──
-BUILD_ALL=false
 BUILD_DMG=false
 TARGET_ARCH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --all) BUILD_ALL=true ;;
     --dmg) BUILD_DMG=true ;;
     --arch) TARGET_ARCH="$2"; shift ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -32,12 +29,10 @@ done
 
 # ── Determine architectures to build ──
 NATIVE_ARCH="$(uname -m)"
-if [ "$BUILD_ALL" = true ]; then
-  ARCHES=("arm64" "x86_64")
-elif [ -n "$TARGET_ARCH" ]; then
+if [ -n "$TARGET_ARCH" ]; then
   ARCHES=("$TARGET_ARCH")
 else
-  ARCHES=("$NATIVE_ARCH")
+  ARCHES=("arm64" "x86_64")
 fi
 
 # ── Build function ──

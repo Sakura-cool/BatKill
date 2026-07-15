@@ -1,6 +1,7 @@
 # Build artifacts
 .build/
 .build-x86/
+.package/
 Tests/.build/
 *.o
 *.d
