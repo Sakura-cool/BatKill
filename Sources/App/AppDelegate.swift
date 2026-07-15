@@ -276,6 +276,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         batteryMonitor.$isOnBattery
             .sink { [weak self] newValue in
                 guard let self = self, appLister.hasLoaded else { return }
+                // Sync battery state to hardware monitor so views can adapt
+                self.hardwareMonitor.isRunningOnBattery = newValue
                 self.refreshBadge()
                 self.queuePowerAction(isOnBattery: newValue)
             }

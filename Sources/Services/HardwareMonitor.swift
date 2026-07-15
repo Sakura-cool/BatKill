@@ -47,6 +47,11 @@ final class HardwareMonitor: ObservableObject {
     /// Highest individual P-Core temperature (excluding aggregates).
     @Published var maxCPUTemp: Double = 0
 
+    /// Whether the Mac is currently running on battery power.
+    /// Updated by AppDelegate from BatteryMonitor's state.
+    /// Used by views to reduce polling frequency on battery.
+    @Published var isRunningOnBattery = false
+
     /// Whether admin authorization has been granted for SMC writes.
     @Published var isAdminAuthorized = false
 

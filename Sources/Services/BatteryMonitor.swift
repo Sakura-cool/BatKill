@@ -39,6 +39,12 @@ final class BatteryMonitor: ObservableObject {
     /// IOKit run loop source for power source change notifications.
     private var notificationSource: CFRunLoopSource?
 
+    /// Poll interval on AC power (fast, low overhead).
+    private let acPollInterval: TimeInterval = 5
+
+    /// Poll interval on battery (reduced to save power).
+    private let batteryPollInterval: TimeInterval = 15
+
     // MARK: - Initialization
 
     /// Performs an initial power state check, registers the IOKit
@@ -46,10 +52,13 @@ final class BatteryMonitor: ObservableObject {
     init() {
         checkPowerState()
         registerIOKitCallback()
-        // Poll every 5 s as a safety net in case IOKit callbacks are missed
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        // Start with the AC interval; checkPowerState() above already set
+        // isOnBattery, so adjustPollInterval() below corrects it immediately.
+        timer = Timer.scheduledTimer(withTimeInterval: acPollInterval, repeats: true) { [weak self] _ in
             self?.checkPowerState()
         }
+        // Correct the interval now that we know the initial power state
+        adjustPollInterval()
     }
 
     /// Cleans up the timer and removes the IOKit run loop source.
@@ -57,6 +66,17 @@ final class BatteryMonitor: ObservableObject {
         timer?.invalidate()
         if let source = notificationSource {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+        }
+    }
+
+    /// Adjusts the polling timer interval based on the current power source.
+    /// Polls less frequently on battery to reduce CPU/IOKit overhead.
+    private func adjustPollInterval() {
+        let interval = isOnBattery ? batteryPollInterval : acPollInterval
+        guard timer?.timeInterval != interval else { return }
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.checkPowerState()
         }
     }
 
@@ -79,6 +99,7 @@ final class BatteryMonitor: ObservableObject {
                 if isOnBattery != onBattery {
                     logger("⚡ isOnBattery changed: \(self.isOnBattery) → \(onBattery)")
                     isOnBattery = onBattery
+                    adjustPollInterval()
                 } else {
                     debugLog("IOKit state=\(state) → onBattery=\(onBattery)")
                 }

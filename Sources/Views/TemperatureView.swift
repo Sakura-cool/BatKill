@@ -120,8 +120,16 @@ struct TemperatureView: View {
             presetStore.ensureAutoPreset(fanCount: hardwareMonitor.fans.count)
             // Initialize fan UI state from current hardware values
             initFanStates()
-            // Apply the currently active preset
-            applyPreset(presetStore.activePreset)
+            // Apply the currently active preset — only if it does NOT require
+            // admin auth. If it does, skip auto-execution so the auth dialog
+            // does NOT pop up unrequested on window open; the user can tap
+            // the preset manually.
+            if let preset = presetStore.activePreset {
+                let needsAdmin = preset.fanAutoModes.values.contains(false)
+                if !needsAdmin || hardwareMonitor.isAdminAuthorized {
+                    executePreset(preset)
+                }
+            }
             // Set up thermal throttle callback to auto-release fans
             hardwareMonitor.onThermalThrottle = {
                 guard hardwareMonitor.isAdminAuthorized else { return }
@@ -135,16 +143,17 @@ struct TemperatureView: View {
                 presetStore.update(auto)
                 executePreset(auto)
             }
-            refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-                hardwareMonitor.refresh()
-                DispatchQueue.main.async {
-                    hardwareMonitor.checkThreshold(thresholdStore.threshold)
-                }
-            }
+            // Start the refresh timer with a battery-aware interval
+            refreshTimer = makeRefreshTimer(onBattery: hardwareMonitor.isRunningOnBattery)
         }
         .onDisappear {
             refreshTimer?.invalidate()
             refreshTimer = nil
+        }
+        // Dynamically adjust refresh rate when the user plugs/unplugs
+        .onReceive(hardwareMonitor.$isRunningOnBattery) { onBattery in
+            refreshTimer?.invalidate()
+            refreshTimer = makeRefreshTimer(onBattery: onBattery)
         }
     }
 
@@ -752,6 +761,9 @@ struct TemperatureView: View {
                     // Admin authorization button (shown after first failed attempt)
                     if fanNeedsAdmin[fan.index] == true {
                         Button {
+                            // This is an EXPLICIT user action — reset denied state
+                            // so the auth dialog actually appears.
+                            HardwareMonitor.resetAuthDenied()
                             if hardwareMonitor.requestAdminAuth() {
                                 fanNeedsAdmin[fan.index] = nil
                                 let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
@@ -808,6 +820,9 @@ struct TemperatureView: View {
 
         let needsAdmin = preset.fanAutoModes.values.contains(false)
         if needsAdmin && !hardwareMonitor.isAdminAuthorized {
+            // User explicitly tapped a preset — reset denied flag so the
+            // auth dialog appears when they're ready to try again.
+            HardwareMonitor.resetAuthDenied()
             if hardwareMonitor.requestAdminAuth() {
                 executePreset(preset)
             }
@@ -871,4 +886,43 @@ struct TemperatureView: View {
         if temp < 70 { return .orange }
         return .red
     }
+
+    /// Creates a repeating timer that refreshes hardware data. The interval
+    /// varies by architecture AND power source to conserve battery life.
+    ///
+    /// |              | Apple Silicon | Intel x86_64 |
+    /// |--------------|--------------|--------------|
+    /// | AC Power     |  2s          |  4s          |
+    /// | Battery      |  3s          |  6s          |
+    private func makeRefreshTimer(onBattery: Bool) -> Timer {
+        let base = hardwareRefreshInterval(onBattery: onBattery)
+        return Timer.scheduledTimer(withTimeInterval: base, repeats: true) { _ in
+            hardwareMonitor.refresh()
+            DispatchQueue.main.async {
+                hardwareMonitor.checkThreshold(thresholdStore.threshold)
+            }
+        }
+    }
+}
+
+// MARK: - Battery-Aware Refresh Interval
+
+/// Returns the hardware sensor refresh interval based on the current
+/// architecture and power source. Polls less frequently on battery
+/// to reduce SMC/IOKit overhead.
+///
+/// |              | Apple Silicon | Intel x86_64 |
+/// |--------------|--------------|--------------|
+/// | AC Power     |  2s          |  4s          |
+/// | Battery      |  3s          |  6s          |
+func hardwareRefreshInterval(onBattery: Bool) -> TimeInterval {
+    #if arch(x86_64)
+    return onBattery ? 6.0 : 4.0
+    #else
+    return onBattery ? 3.0 : 2.0
+    #endif
+}
+
+func batteryPollInterval(onBattery: Bool) -> TimeInterval {
+    onBattery ? 15.0 : 5.0
 }
