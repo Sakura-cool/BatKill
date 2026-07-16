@@ -49,12 +49,20 @@ build_arch() {
 
   SWIFT_FILES=$(find "$SRC_DIR" -name '*.swift' | sort)
 
+  EXTRA_FLAGS=""
+  if [ "$arch" = "arm64" ]; then
+    EXTRA_FLAGS="-Xfrontend -warn-long-function-bodies=1000 -Xfrontend -warn-long-expression-type-checking=1000"
+  elif [ "$arch" = "x86_64" ]; then
+    EXTRA_FLAGS="-Xllvm -x86-use-vzeroupper"
+  fi
+
   swiftc \
     -sdk "$SDK_PATH" \
     -target "$target" \
     -parse-as-library \
     -O \
     -whole-module-optimization \
+    $EXTRA_FLAGS \
     -o "${build_dir}/${APP_NAME}" \
     $SWIFT_FILES \
     -framework SwiftUI \
@@ -76,6 +84,9 @@ build_arch() {
   if [ -f "${RES_DIR}/AppIcon.icns" ]; then
     cp "${RES_DIR}/AppIcon.icns" "${app_bundle}/Contents/Resources/"
   fi
+
+  # ── Ad-hoc code sign (required for SMAppService login item registration) ──
+  codesign --force --deep --sign - "$app_bundle" 2>/dev/null
 
   echo "  ✅ ${app_bundle}"
 }

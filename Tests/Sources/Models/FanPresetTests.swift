@@ -264,6 +264,7 @@ final class FanPresetTests: TestCase {
     private func testFanPresetStoreAutoPreset() {
         runTest("FanPresetStore always has auto preset") {
             let store = FanPresetStore()
+            store.ensureAutoPreset(fanCount: 1)
             
             XCTAssertTrue(store.presets.count >= 1, "Should have at least 1 preset (Auto)")
             XCTAssertTrue(store.presets.first?.isBuiltIn ?? false, "First preset should be built-in Auto")

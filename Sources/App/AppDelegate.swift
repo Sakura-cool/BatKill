@@ -34,7 +34,7 @@ import UserNotifications
 /// Entry point is main.swift (not @main on this class) to avoid SwiftUI's
 /// `App` protocol, which creates a persistent scene view graph that AppKit
 /// renders in display cycles even when idle (~2-6% CPU).
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Subsystem References
 
@@ -234,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "BatKill"
         window.styleMask = NSWindow.StyleMask([.titled, .closable, .miniaturizable])
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.setContentSize(NSSize(width: 500, height: 640))
         window.center()
         window.makeKeyAndOrderFront(nil as NSWindow?)
@@ -261,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.title = "Temperature"
         window.styleMask = [NSWindow.StyleMask.titled, NSWindow.StyleMask.closable]
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.setContentSize(NSSize(width: 420, height: 340))
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -275,6 +277,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate()
         } else {
             NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        if window === settingsWindow {
+            settingsWindow = nil
+        } else if window === temperatureWindow {
+            temperatureWindow = nil
         }
     }
 

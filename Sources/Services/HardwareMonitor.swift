@@ -47,6 +47,12 @@ final class HardwareMonitor: ObservableObject {
     /// Highest individual P-Core temperature (excluding aggregates).
     @Published var maxCPUTemp: Double = 0
 
+    /// 5-second rolling average of maxCPUTemp (smoothed to avoid spike false triggers).
+    @Published var smoothedCPUTemp: Double = 0
+
+    private var cpuTempBuffer: [Double] = []
+    private let cpuTempBufferSize = 5
+
     /// Whether the Mac is currently running on battery power.
     /// Updated by AppDelegate from BatteryMonitor's state.
     /// Used by views to reduce polling frequency on battery.
@@ -209,6 +215,14 @@ final class HardwareMonitor: ObservableObject {
     ///
     /// Falls back to a full `readTemperatures()` scan if the key cache has
     /// not been populated yet (first call after launch).
+    private var partialBatchSize: Int {
+        #if arch(arm64)
+        return 2
+        #else
+        return 1
+        #endif
+    }
+
     func partialRefresh() {
         lazyEnsureOpen()
         guard connection != 0 else { return }
@@ -218,7 +232,6 @@ final class HardwareMonitor: ObservableObject {
             guard let self else { return }
 
             guard let keys = HardwareMonitor.validTempKeysCache, !keys.isEmpty else {
-                // Cache not yet populated — do a full scan to initialize it
                 let temps = self.readTemperatures()
                 let cachedFans = self.fans
                 DispatchQueue.main.async {
@@ -229,21 +242,22 @@ final class HardwareMonitor: ObservableObject {
                 return
             }
 
-            let idx = self.tempCursor
-            let item = keys[idx]
-
-            if let sensor = self.readTempSensor(key: item.key, name: item.name, category: item.category) {
-                if let existing = self.tempAccumulator.firstIndex(where: { $0.key == sensor.key }) {
-                    self.tempAccumulator[existing] = sensor
-                } else {
-                    self.tempAccumulator.append(sensor)
+            let batchSize = self.partialBatchSize
+            for _ in 0..<batchSize {
+                let idx = self.tempCursor
+                let item = keys[idx]
+                if let sensor = self.readTempSensor(key: item.key, name: item.name, category: item.category) {
+                    if let existing = self.tempAccumulator.firstIndex(where: { $0.key == sensor.key }) {
+                        self.tempAccumulator[existing] = sensor
+                    } else {
+                        self.tempAccumulator.append(sensor)
+                    }
                 }
+                self.tempCursor = (idx + 1) % keys.count
+                if self.tempCursor == 0 { break }
             }
 
-            self.tempCursor = (idx + 1) % keys.count
-
             if self.tempCursor == 0 {
-                // Full cycle complete: publish accumulated temps + recompute aggregate
                 let pCoreTemps = self.tempAccumulator
                     .filter { $0.name.hasPrefix("CPU P-Core ") && !$0.name.contains("Aggregate") }
                     .map(\.temperature)
@@ -257,6 +271,7 @@ final class HardwareMonitor: ObservableObject {
                     self.temperatures = batch
                     self.fans = cachedFans
                     self.maxCPUTemp = maxTemp
+                    self.updateSmoothedCPUTemp(maxTemp)
                     self.isRefreshing = false
                 }
             } else {
@@ -267,18 +282,52 @@ final class HardwareMonitor: ObservableObject {
         }
     }
 
+    /// Fast temperature read: reads ALL sensors in one background cycle,
+    /// then publishes immediately. Used when the temperature window is open
+    /// to provide real-time updates at ~1s intervals.
+    func fastRefresh() {
+        lazyEnsureOpen()
+        guard connection != 0 else { return }
+        if isRefreshing { return }
+        isRefreshing = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let temps = self.readTemperatures()
+            let pCoreTemps = temps
+                .filter { $0.name.hasPrefix("CPU P-Core ") && !$0.name.contains("Aggregate") }
+                .map(\.temperature)
+            let maxTemp = pCoreTemps.max() ?? 0
+            let cachedFans = self.fans
+            DispatchQueue.main.async {
+                self.temperatures = temps
+                self.fans = cachedFans
+                self.maxCPUTemp = maxTemp
+                self.updateSmoothedCPUTemp(maxTemp)
+                self.isRefreshing = false
+            }
+        }
+    }
+
     /// Checks whether the maximum CPU temperature meets or exceeds the
     /// given threshold. Fires `onThermalThrottle` when the threshold is
     /// newly exceeded, and `onThermalCooldown` when the CPU cools back
     /// below it.
     func checkThreshold(_ threshold: Double) {
         let wasThrottled = thermalThrottled
-        thermalThrottled = maxCPUTemp >= threshold
+        thermalThrottled = smoothedCPUTemp >= threshold
         if thermalThrottled && !wasThrottled {
             onThermalThrottle?()
         } else if !thermalThrottled && wasThrottled {
             onThermalCooldown?()
         }
+    }
+
+    private func updateSmoothedCPUTemp(_ value: Double) {
+        cpuTempBuffer.append(value)
+        if cpuTempBuffer.count > cpuTempBufferSize {
+            cpuTempBuffer.removeFirst()
+        }
+        smoothedCPUTemp = cpuTempBuffer.reduce(0, +) / Double(cpuTempBuffer.count)
     }
 
     // MARK: - SMC Connection Lifecycle

@@ -30,22 +30,17 @@ extension HardwareMonitor {
     }
 
     var intelTempKeys: [(key: String, name: String, category: TemperatureCategory)] {
-        [
-            ("TCPU", "CPU Package",         .cpu),
-            ("TC0C", "CPU Core 0",          .cpu),
-            ("TC1C", "CPU Core 1",          .cpu),
-            ("TC2C", "CPU Core 2",          .cpu),
-            ("TC3C", "CPU Core 3",          .cpu),
-            ("TC4C", "CPU Core 4",          .cpu),
-            ("TC5C", "CPU Core 5",          .cpu),
-            ("TC6C", "CPU Core 6",          .cpu),
-            ("TC7C", "CPU Core 7",          .cpu),
-            ("TC8C", "CPU Core 8",          .cpu),
-            ("TCXC", "CPU Proximity",       .cpu),
-            ("TCXD", "CPU Die",             .cpu),
-            ("TCXE", "CPU Efficiency",      .cpu),
-            ("TCXF", "CPU Performance",     .cpu),
-        ]
+        let coreCount = min(Int(getSysctlInt("hw.physicalcpu")), 24)
+        var keys: [(key: String, name: String, category: TemperatureCategory)] = []
+        keys.append(("TCPU", "CPU Package", .cpu))
+        for i in 0..<coreCount {
+            keys.append(("TC\(i)C", "CPU Core \(i)", .cpu))
+        }
+        keys.append(("TCXC", "CPU Proximity",   .cpu))
+        keys.append(("TCXD", "CPU Die",          .cpu))
+        keys.append(("TCXE", "CPU Efficiency",   .cpu))
+        keys.append(("TCXF", "CPU Performance",  .cpu))
+        return keys
     }
 
     var commonTempKeys: [(key: String, name: String, category: TemperatureCategory)] {

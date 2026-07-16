@@ -149,6 +149,8 @@ final class Updater: ObservableObject {
     /// User-facing status message (e.g., "Downloading v0.0.14...").
     @Published var statusMessage: String?
 
+    private var progressObservation: NSKeyValueObservation?
+
     /// Reference to the version checker for accessing the latest version.
     private let checker: VersionChecker
 
@@ -173,30 +175,50 @@ final class Updater: ObservableObject {
 
         logger("Updater: downloading \(downloadURL)")
 
-        let task = URLSession.shared.downloadTask(with: url) { [weak self] tempURL, _, error in
-            DispatchQueue.main.async {
-                self?.isDownloading = false
-            }
+        let task = URLSession.shared.downloadTask(with: url) { [weak self] tempURL, response, error in
+            guard let self else { return }
 
-            guard let tempURL = tempURL, error == nil else {
-                logger("Updater: download failed: \(error?.localizedDescription ?? "unknown")")
+            if let error {
+                logger("Updater: download failed: \(error.localizedDescription)")
                 DispatchQueue.main.async {
-                    self?.statusMessage = "Download failed"
+                    self.isDownloading = false
+                    self.statusMessage = "Download failed: \(error.localizedDescription)"
                 }
                 return
             }
 
-            self?.installFromDmg(tempURL: tempURL)
+            guard let httpResp = response as? HTTPURLResponse, (200..<300).contains(httpResp.statusCode) else {
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                logger("Updater: download HTTP error \(code)")
+                DispatchQueue.main.async {
+                    self.isDownloading = false
+                    self.statusMessage = "Download failed (HTTP \(code))"
+                }
+                return
+            }
+
+            guard let tempURL else {
+                logger("Updater: download returned nil temp URL")
+                DispatchQueue.main.async {
+                    self.isDownloading = false
+                    self.statusMessage = "Download failed: no file"
+                }
+                return
+            }
+
+            logger("Updater: download OK, installing from \(tempURL.path)")
+            DispatchQueue.main.async {
+                self.statusMessage = "Installing..."
+            }
+            self.installFromDmg(tempURL: tempURL)
         }
 
-        // Observe download progress for the UI progress bar
-        let observation = task.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
+        self.progressObservation = task.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
             DispatchQueue.main.async {
                 self?.downloadProgress = progress.fractionCompleted
             }
         }
         task.resume()
-        _ = observation
     }
 
     /// Mounts the downloaded dmg, copies the .app bundle, writes
@@ -221,9 +243,8 @@ final class Updater: ObservableObject {
                 return
             }
 
-            // Copy .app to tmpDir for installation
-            try runShell("ditto \"\(appPath.path)\" \"\(tmpDir.path)/\(APP_NAME).app\"")
-            let newAppPath = tmpDir.appendingPathComponent("\(APP_NAME).app")
+            try runShell("ditto \"\(appPath.path)\" \"\(tmpDir.path)/\(appPath.lastPathComponent)\"")
+            let newAppPath = tmpDir.appendingPathComponent(appPath.lastPathComponent)
 
             // Detach dmg
             try runShell("hdiutil detach \"\(mountPoint.path)\" 2>/dev/null")

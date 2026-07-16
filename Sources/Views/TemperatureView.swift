@@ -345,10 +345,10 @@ struct TemperatureView: View {
                         .foregroundColor(.red)
                 }
 
-                // Live CPU average temperature indicator
-                let cpuTemp = hardwareMonitor.maxCPUTemp
+                // Live CPU Die temperature indicator
+                let cpuTemp = hardwareMonitor.smoothedCPUTemp
                 HStack(spacing: 4) {
-                    Text(lm.translate("CPU avg:", "CPU平均:"))
+                    Text(lm.translate("CPU Avg:", "CPU 均温:"))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Text(String(format: "%.1f°C", cpuTemp))
@@ -914,20 +914,14 @@ struct TemperatureView: View {
         return .red
     }
 
-    /// Creates a repeating timer that calls `partialRefresh()` to read
-    /// exactly ONE SMC temperature key per tick. Each tick does only 1
-    /// kernel trap instead of ~15-25, spreading the work across the full
-    /// refresh cycle (~6-8s). This eliminates the burst CPU spike that
-    /// caused stutter in other apps.
-    ///
-    /// The interval varies by architecture and power source. Timer tolerance
-    /// is set to 10% of the interval so the system can coalesce wake-ups
-    /// with other system timers, reducing CPU usage.
+    /// Creates a repeating timer that reads all sensors via `fastRefresh()` while
+    /// the TemperatureView is open, ensuring the UI stays fresh. On close the
+    /// timer is invalidated so no SMC traffic occurs in the background.
     private func makeRefreshTimer(onBattery: Bool) -> Timer {
         let tick = hardwareRefreshInterval(onBattery: onBattery)
         let timer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak hardwareMonitor, weak thresholdStore] _ in
             guard let hardwareMonitor, let thresholdStore else { return }
-            hardwareMonitor.partialRefresh()
+            hardwareMonitor.fastRefresh()
             DispatchQueue.main.async {
                 hardwareMonitor.checkThreshold(thresholdStore.threshold)
             }
