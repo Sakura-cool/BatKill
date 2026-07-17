@@ -130,6 +130,13 @@ package_dmg() {
 
   rm -rf "$stage_dir"
   echo "  ✅ ${dmg_path}"
+
+  # ── Also create .app.zip from the same build ──
+  local zip_path="${package_dir}/${APP_NAME}-${arch}.zip"
+  echo "  📦 Creating ${APP_NAME}-${arch}.zip …"
+  rm -f "$zip_path"
+  ditto -c -k --keepParent "$app_bundle" "$zip_path"
+  echo "  ✅ ${zip_path}"
 }
 
 # ── Package DMG (only in --dmg mode) ──
@@ -147,6 +154,7 @@ for arch in "${ARCHES[@]}"; do
   echo "  .build/${arch}/${APP_NAME}-${arch}.app"
   if [ "$BUILD_DMG" = true ]; then
     echo "  💿 .package/${arch}/${APP_NAME}-${arch}.dmg"
+    echo "  📦 .package/${arch}/${APP_NAME}-${arch}.zip"
   fi
 done
 echo "═══════════════════════════════════════════"
