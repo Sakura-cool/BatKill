@@ -1,6 +1,7 @@
 #!/bin/bash
 # ────────────────────────────────────────────────────
 # Generate BatKill.app icon via Swift + iconutil
+# Renders at 2048×2048 with sharpening for crisp output
 # ────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -12,8 +13,9 @@ trap "rm -rf \"$TMPDIR\"" EXIT
 # Write a Swift script that renders the icon
 cat > "$TMPDIR/gen.swift" << 'SWIFT'
 import AppKit
+import CoreImage
 
-let iconSize: CGFloat = 1024
+let iconSize: CGFloat = 2048
 let img = NSImage(size: NSSize(width: iconSize, height: iconSize))
 img.lockFocusFlipped(false)
 let ctx = NSGraphicsContext.current!.cgContext
@@ -36,53 +38,76 @@ ctx.drawLinearGradient(gradient, start: CGPoint(x: 0, y: iconSize), end: CGPoint
 // --- Battery body ---
 let batteryColor: CGColor = CGColor(red: 1, green: 1, blue: 1, alpha: 0.92)
 ctx.setStrokeColor(batteryColor)
-ctx.setLineWidth(28)
+ctx.setLineWidth(56)
 ctx.setLineCap(.round)
 ctx.setLineJoin(.round)
 
-let bw: CGFloat = 480   // battery width
-let bh: CGFloat = 320   // battery height
+let bw: CGFloat = 960   // battery width  (2x)
+let bh: CGFloat = 640   // battery height (2x)
 let bx = (iconSize - bw) / 2
 let by = (iconSize - bh) / 2
-let br: CGFloat = 50    // battery corner
+let br: CGFloat = 100   // battery corner (2x)
 
 let bodyRect = CGRect(x: bx, y: by, width: bw, height: bh)
 ctx.addPath(CGPath(roundedRect: bodyRect, cornerWidth: br, cornerHeight: br, transform: nil))
 ctx.strokePath()
 
 // --- Battery terminal (tip) ---
-let tw: CGFloat = 40
-let th: CGFloat = 80
+let tw: CGFloat = 80    // 2x
+let th: CGFloat = 160   // 2x
 let tx = bx + bw
 let ty = (iconSize - th) / 2
 let termRect = CGRect(x: tx, y: ty, width: tw, height: th)
-let termPath = CGPath(roundedRect: termRect, cornerWidth: 16, cornerHeight: 16, transform: nil)
+let termPath = CGPath(roundedRect: termRect, cornerWidth: 32, cornerHeight: 32, transform: nil)
 ctx.addPath(termPath)
 ctx.fillPath()
 
-// --- Lightning bolt ⚡ ---
+// --- Lightning bolt ⚡ (2x coordinates) ---
 ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.92))
 let bolt = CGMutablePath()
-bolt.move(to: CGPoint(x: 570, y: 700))
-bolt.addLine(to: CGPoint(x: 420, y: 480))
-bolt.addLine(to: CGPoint(x: 510, y: 480))
-bolt.addLine(to: CGPoint(x: 440, y: 320))
-bolt.addLine(to: CGPoint(x: 610, y: 540))
-bolt.addLine(to: CGPoint(x: 520, y: 540))
+bolt.move(to: CGPoint(x: 1140, y: 1400))
+bolt.addLine(to: CGPoint(x: 840, y: 960))
+bolt.addLine(to: CGPoint(x: 1020, y: 960))
+bolt.addLine(to: CGPoint(x: 880, y: 640))
+bolt.addLine(to: CGPoint(x: 1220, y: 1080))
+bolt.addLine(to: CGPoint(x: 1040, y: 1080))
 bolt.closeSubpath()
 ctx.addPath(bolt)
 ctx.fillPath()
 
 img.unlockFocus()
 
-// --- Save as PNG ---
+// --- Sharpen via CIUnsharpMask ---
 guard let tiff = img.tiffRepresentation,
       let bitmap = NSBitmapImageRep(data: tiff),
-      let png = bitmap.representation(using: .png, properties: [:]) else {
-    print("❌ Failed to render icon")
+      let cgImage = bitmap.cgImage else {
+    print("❌ Failed to get bitmap")
     exit(1)
 }
-let url = URL(fileURLWithPath: "\(NSTemporaryDirectory())/icon_1024.png")
+
+let ciImage = CIImage(cgImage: cgImage)
+guard let filter = CIFilter(name: "CIUnsharpMask") else {
+    print("❌ No CIUnsharpMask filter")
+    exit(1)
+}
+filter.setValue(ciImage, forKey: kCIInputImageKey)
+filter.setValue(2.5, forKey: kCIInputRadiusKey)    // sharpen radius
+filter.setValue(1.2, forKey: kCIInputIntensityKey)  // sharpen strength
+
+let context = CIContext(options: [.workingColorSpace: NSNull()])
+guard let output = filter.outputImage,
+      let sharpened = context.createCGImage(output, from: output.extent) else {
+    print("❌ Sharpening failed")
+    exit(1)
+}
+
+// --- Save as PNG ---
+let sharpBitmap = NSBitmapImageRep(cgImage: sharpened)
+guard let png = sharpBitmap.representation(using: .png, properties: [.compressionFactor: 1.0]) else {
+    print("❌ Failed to encode PNG")
+    exit(1)
+}
+let url = URL(fileURLWithPath: "\(NSTemporaryDirectory())/icon_2048.png")
 try png.write(to: url)
 print(url.path)
 SWIFT
@@ -95,6 +120,7 @@ echo "✅ Icon PNG: $GENERATED"
 ICONSET="$TMPDIR/AppIcon.iconset"
 mkdir -p "$ICONSET"
 
+# Downscale from 2048×2048 sharpened source to all standard sizes
 sips -z 16  16  "$GENERATED" --out "$ICONSET/icon_16x16.png"        > /dev/null 2>&1
 sips -z 32  32  "$GENERATED" --out "$ICONSET/icon_16x16@2x.png"     > /dev/null 2>&1
 sips -z 32  32  "$GENERATED" --out "$ICONSET/icon_32x32.png"        > /dev/null 2>&1
@@ -104,7 +130,7 @@ sips -z 256 256 "$GENERATED" --out "$ICONSET/icon_128x128@2x.png"   > /dev/null 
 sips -z 256 256 "$GENERATED" --out "$ICONSET/icon_256x256.png"      > /dev/null 2>&1
 sips -z 512 512 "$GENERATED" --out "$ICONSET/icon_256x256@2x.png"   > /dev/null 2>&1
 sips -z 512 512 "$GENERATED" --out "$ICONSET/icon_512x512.png"      > /dev/null 2>&1
-cp "$GENERATED" "$ICONSET/icon_512x512@2x.png"
+sips -z 1024 1024 "$GENERATED" --out "$ICONSET/icon_512x512@2x.png" > /dev/null 2>&1
 
 # Create .icns
 iconutil -c icns "$ICONSET" -o "$OUT"

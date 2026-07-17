@@ -792,6 +792,7 @@ struct TemperatureView: View {
                             // so the auth dialog actually appears.
                             HardwareMonitor.resetAuthDenied()
                             if hardwareMonitor.requestAdminAuth() {
+                                bringAppToFront()
                                 fanNeedsAdmin[fan.index] = nil
                                 let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
                                 hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
@@ -840,6 +841,21 @@ struct TemperatureView: View {
         }
     }
 
+    /// Brings the BatKill app and its Temperature window to the foreground
+    /// after an authorization dialog closes. The system may otherwise leave
+    /// focus on whichever app was active before the auth dialog appeared.
+    private func bringAppToFront() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NSApp.activate()
+            NSApp.arrangeInFront(nil)
+            if let window = NSApp.windows.first(where: { $0.title == "Temperature" && $0.isVisible }) {
+                window.makeKeyAndOrderFront(nil)
+            } else if let window = NSApp.windows.first(where: { $0.isVisible }) {
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+
     /// Applies a fan preset. If the preset requires manual fan modes and
     /// admin is not yet authorized, requests authorization first.
     private func applyPreset(_ preset: FanPreset?) {
@@ -851,6 +867,7 @@ struct TemperatureView: View {
             // auth dialog appears when they're ready to try again.
             HardwareMonitor.resetAuthDenied()
             if hardwareMonitor.requestAdminAuth() {
+                bringAppToFront()
                 executePreset(preset)
             }
         } else {
@@ -921,10 +938,7 @@ struct TemperatureView: View {
         let tick = hardwareRefreshInterval(onBattery: onBattery)
         let timer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak hardwareMonitor, weak thresholdStore] _ in
             guard let hardwareMonitor, let thresholdStore else { return }
-            hardwareMonitor.fastRefresh()
-            DispatchQueue.main.async {
-                hardwareMonitor.checkThreshold(thresholdStore.threshold)
-            }
+            hardwareMonitor.fastRefresh(threshold: thresholdStore.threshold)
         }
         timer.tolerance = tick * 0.1
         return timer

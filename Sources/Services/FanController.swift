@@ -130,7 +130,7 @@ extension HardwareMonitor {
             var item = AuthorizationItem(name: cName, valueLength: 0, value: nil, flags: 0)
             return withUnsafeMutablePointer(to: &item) { itemPtr in
                 var rights = AuthorizationRights(count: 1, items: itemPtr)
-                let flags: AuthorizationFlags = [.preAuthorize, .extendRights, .interactionAllowed]
+                let flags: AuthorizationFlags = [.interactionAllowed, .extendRights]
                 return AuthorizationCopyRights(ref, &rights, nil, flags, nil) == errAuthorizationSuccess
             }
         }
