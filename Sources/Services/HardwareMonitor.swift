@@ -201,6 +201,7 @@ final class HardwareMonitor: ObservableObject {
                 self.temperatures = temps
                 self.fans = fans
                 self.maxCPUTemp = maxTemp
+                self.updateSmoothedCPUTemp(maxTemp)
                 self.isRefreshing = false
             }
         }
@@ -285,7 +286,7 @@ final class HardwareMonitor: ObservableObject {
     /// Fast temperature read: reads ALL sensors in one background cycle,
     /// then publishes immediately. Used when the temperature window is open
     /// to provide real-time updates at ~1s intervals.
-    func fastRefresh() {
+    func fastRefresh(threshold: Double? = nil) {
         lazyEnsureOpen()
         guard connection != 0 else { return }
         if isRefreshing { return }
@@ -293,10 +294,10 @@ final class HardwareMonitor: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
             let temps = self.readTemperatures()
-            let pCoreTemps = temps
-                .filter { $0.name.hasPrefix("CPU P-Core ") && !$0.name.contains("Aggregate") }
+            let cpuTemps = temps
+                .filter { $0.category == .cpu && !$0.name.contains("Aggregate") }
                 .map(\.temperature)
-            let maxTemp = pCoreTemps.max() ?? 0
+            let maxTemp = cpuTemps.max() ?? 0
             let cachedFans = self.fans
             DispatchQueue.main.async {
                 self.temperatures = temps
@@ -304,6 +305,9 @@ final class HardwareMonitor: ObservableObject {
                 self.maxCPUTemp = maxTemp
                 self.updateSmoothedCPUTemp(maxTemp)
                 self.isRefreshing = false
+                if let threshold {
+                    self.checkThreshold(threshold)
+                }
             }
         }
     }
