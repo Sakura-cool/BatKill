@@ -123,6 +123,15 @@ final class HardwareMonitor: ObservableObject {
     /// is published and the accumulator is reset.
     private var tempAccumulator: [TemperatureSensor] = []
 
+    /// Cursor into the CPU/GPU-filtered key list. Each `partialRefreshCPUAndGPU()`
+    /// call reads `partialBatchSize` keys at this index, advancing by batchSize.
+    /// When the cursor wraps, accumulated results are published.
+    private var cpuGpuCursor = 0
+
+    /// Accumulator for CPU/GPU-only staggered reads. `partialRefreshCPUAndGPU()`
+    /// adds each sensor here. At cycle end, the full batch is published.
+    private var cpuGpuAccumulator: [TemperatureSensor] = []
+
     /// Static reference to the authorization object for admin SMC writes.
     /// Persists for the lifetime of the process once granted.
     static var authRef: AuthorizationRef?
@@ -224,7 +233,7 @@ final class HardwareMonitor: ObservableObject {
         #endif
     }
 
-    func partialRefresh() {
+    func partialRefresh(threshold: Double? = nil) {
         lazyEnsureOpen()
         guard connection != 0 else { return }
         if isRefreshing { return }
@@ -274,6 +283,77 @@ final class HardwareMonitor: ObservableObject {
                     self.maxCPUTemp = maxTemp
                     self.updateSmoothedCPUTemp(maxTemp)
                     self.isRefreshing = false
+                    if let threshold { self.checkThreshold(threshold) }
+                }
+            } else {
+                DispatchQueue.main.async {
+                    self.isRefreshing = false
+                }
+            }
+        }
+    }
+
+    /// CPU/GPU-only staggered read: reads `partialBatchSize` CPU/GPU temperature
+    /// keys per call, skipping memory/battery/storage/ambient/other sensors.
+    /// Used when the temperature window is in the background — reduces SMC
+    /// kernel traps while still providing real-time CPU/GPU temperature updates.
+    func partialRefreshCPUAndGPU(threshold: Double? = nil) {
+        lazyEnsureOpen()
+        guard connection != 0 else { return }
+        if isRefreshing { return }
+        isRefreshing = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+
+            guard let keys = HardwareMonitor.validTempKeysCache, !keys.isEmpty else {
+                let temps = self.readTemperatures()
+                let cachedFans = self.fans
+                DispatchQueue.main.async {
+                    self.temperatures = temps
+                    self.fans = cachedFans
+                    self.isRefreshing = false
+                }
+                return
+            }
+
+            let cpuGpuKeys = keys.filter { $0.category == .cpu || $0.category == .gpu }
+            guard !cpuGpuKeys.isEmpty else {
+                DispatchQueue.main.async { self.isRefreshing = false }
+                return
+            }
+
+            let batchSize = self.partialBatchSize
+            for _ in 0..<batchSize {
+                let idx = self.cpuGpuCursor
+                let item = cpuGpuKeys[idx]
+                if let sensor = self.readTempSensor(key: item.key, name: item.name, category: item.category) {
+                    if let existing = self.cpuGpuAccumulator.firstIndex(where: { $0.key == sensor.key }) {
+                        self.cpuGpuAccumulator[existing] = sensor
+                    } else {
+                        self.cpuGpuAccumulator.append(sensor)
+                    }
+                }
+                self.cpuGpuCursor = (idx + 1) % cpuGpuKeys.count
+                if self.cpuGpuCursor == 0 { break }
+            }
+
+            if self.cpuGpuCursor == 0 {
+                let pCoreTemps = self.cpuGpuAccumulator
+                    .filter { $0.name.hasPrefix("CPU P-Core ") && !$0.name.contains("Aggregate") }
+                    .map(\.temperature)
+                let maxTemp = pCoreTemps.max() ?? 0
+                let cachedFans = self.fans
+                let batch = self.cpuGpuAccumulator
+
+                self.cpuGpuAccumulator = []
+
+                DispatchQueue.main.async {
+                    self.temperatures = batch
+                    self.fans = cachedFans
+                    self.maxCPUTemp = maxTemp
+                    self.updateSmoothedCPUTemp(maxTemp)
+                    self.isRefreshing = false
+                    if let threshold { self.checkThreshold(threshold) }
                 }
             } else {
                 DispatchQueue.main.async {

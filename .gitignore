@@ -13,3 +13,6 @@ Tests/.build/
 
 # Temp
 */Icon/Sources/.build/
+
+# OMC runtime state
+.omo/
