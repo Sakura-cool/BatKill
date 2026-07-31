@@ -176,6 +176,8 @@ struct TemperatureView: View {
         .onDisappear {
             refreshTimer?.invalidate()
             refreshTimer = nil
+            hardwareMonitor.onThermalThrottle = nil
+            hardwareMonitor.onThermalCooldown = nil
         }
         // Dynamically adjust refresh rate when the user plugs/unplugs
         .onReceive(hardwareMonitor.$isRunningOnBattery) { onBattery in
@@ -463,7 +465,7 @@ struct TemperatureView: View {
     @ViewBuilder
     private func sensorRow(_ sensor: TemperatureSensor, isLast: Bool) -> some View {
         HStack(spacing: 8) {
-            Text("  \(sensor.name)")
+            Text(sensor.name).padding(.leading, 16)
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .frame(width: 130, alignment: .leading)
@@ -535,7 +537,7 @@ struct TemperatureView: View {
                                     .font(.caption)
                                 if preset.isBuiltIn {
                                     Image(systemName: "lock.fill")
-                                        .font(.system(size: 8))
+                                        .font(.system(size: 9))
                                         .foregroundColor(.secondary)
                                 }
                                 Text(preset.isBuiltIn
@@ -754,11 +756,11 @@ struct TemperatureView: View {
 
                 // Min/Max speed labels
                 HStack {
-                    Text(String(format: "Min: %d", Int(fan.minSpeed)))
+                    Text(lm.translate("Min: %d", "最小: %d", Int(fan.minSpeed)))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                     Spacer()
-                    Text(String(format: "Max: %d", Int(fan.maxSpeed)))
+                    Text(lm.translate("Max: %d", "最大: %d", Int(fan.maxSpeed)))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }

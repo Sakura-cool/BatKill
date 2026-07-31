@@ -88,8 +88,15 @@ final class LogQueue {
     }
     
     /// Formats a message with ISO-style timestamp.
+    private static let logDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .medium
+        return f
+    }()
+
     private func formatTimestamp(_ msg: String) -> String {
-        let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        let ts = Self.logDateFormatter.string(from: Date())
         return "[\(ts)] \(msg)"
     }
     

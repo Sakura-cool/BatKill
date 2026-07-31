@@ -63,9 +63,9 @@ final class ProcessKiller: ObservableObject {
     private var killedRestorePaths: [String] {
         get { UserDefaults.standard.stringArray(forKey: "killedRestorePaths") ?? [] }
         set {
-            UserDefaults.standard.set(newValue, forKey: "killedRestorePaths")
-            DispatchQueue.main.async { [weak self] in
-                self?.pendingRestoreCount = newValue.count
+            DispatchQueue.main.async {
+                UserDefaults.standard.set(newValue, forKey: "killedRestorePaths")
+                self.pendingRestoreCount = newValue.count
             }
         }
     }
@@ -394,6 +394,7 @@ final class ProcessKiller: ObservableObject {
 
     /// Kills all processes matching the given name using `/usr/bin/killall`.
     /// Best-effort: returns `true` if the command ran, regardless of result.
+    @discardableResult
     private func killProcessByName(_ name: String) -> Bool {
         let proc = Process()
         proc.launchPath = "/usr/bin/killall"
@@ -402,7 +403,7 @@ final class ProcessKiller: ObservableObject {
         proc.standardError = Pipe()
         guard (try? proc.run()) != nil else { return false }
         proc.waitUntilExit()
-        return true // best effort
+        return proc.terminationStatus == 0
     }
 
     /// Convenience wrapper around `killProcessByName()`.
@@ -464,6 +465,12 @@ final class ProcessKiller: ObservableObject {
               let dict = NSMutableDictionary(contentsOfFile: plistPath)
         else { return }
 
+        // Save a backup of the original plist file before modifying
+        let backupUUID = UUID().uuidString
+        let backupPath = NSTemporaryDirectory() + "batkill_plist_backup_\(backupUUID).plist"
+        try? FileManager.default.copyItem(atPath: plistPath, toPath: backupPath)
+        UserDefaults.standard.set(backupPath, forKey: "batkill_plistBackup_\(label)")
+
         // Save original KeepAlive to UserDefaults
         let keepAliveKey = "batkill_originalKeepAlive_\(label)"
         if let originalKeepAlive = dict["KeepAlive"] {
@@ -512,8 +519,11 @@ final class ProcessKiller: ObservableObject {
         // Write back the original KeepAlive value
         if let keepAliveDict = originalKeepAlive as? [String: Any] {
             dict["KeepAlive"] = keepAliveDict
+        } else if originalKeepAlive is Bool || originalKeepAlive is NSNumber {
+            // Original was a plain boolean — write it back directly
+            dict["KeepAlive"] = originalKeepAlive
         } else {
-            // Original was a plain boolean or absent — remove the key
+            // Original was absent or an unsupported type — remove the key
             dict.removeObject(forKey: "KeepAlive")
         }
 
@@ -523,6 +533,14 @@ final class ProcessKiller: ObservableObject {
         }
 
         UserDefaults.standard.removeObject(forKey: keepAliveKey)
+
+        // Remove the backup plist file created by patchPlistForKillOnce
+        let backupKey = "batkill_plistBackup_\(label)"
+        if let backupPath = UserDefaults.standard.string(forKey: backupKey) {
+            try? FileManager.default.removeItem(atPath: backupPath)
+            UserDefaults.standard.removeObject(forKey: backupKey)
+        }
+
         return true
     }
 
@@ -581,7 +599,7 @@ final class ProcessKiller: ObservableObject {
     /// Checks whether a process with the given PID is still alive
     /// by sending signal 0 (no signal, just permission check).
     private func isAlive(_ pid: Int32) -> Bool {
-        return kill(pid, 0) == 0 || errno != ESRCH
+        return kill(pid, 0) == 0
     }
 
     /// Escapes special characters in a string for safe embedding in AppleScript.

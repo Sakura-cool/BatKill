@@ -193,7 +193,7 @@ final class AppLister: ObservableObject {
         // registered with launchd. Filters out com.apple.* system services.
         let userServices = self.userLaunchdServices()
         for svc in userServices {
-            let fullPath = "/usr/local/opt/\(svc.name)"
+            let fullPath = "\(brewPrefix())/opt/\(svc.name)"
             guard seen.insert(fullPath).inserted else { continue }
             result.append(AppItem(
                 name: svc.name,
@@ -214,7 +214,7 @@ final class AppLister: ObservableObject {
         // including those that are currently stopped.
         let brewServices = self.brewAllServices()
         for svc in brewServices {
-            let fullPath = "/opt/homebrew/opt/\(svc.name)"
+            let fullPath = "\(brewPrefix())/opt/\(svc.name)"
             guard seen.insert(fullPath).inserted else { continue }
             result.append(AppItem(
                 name: svc.name,
@@ -304,6 +304,17 @@ final class AppLister: ObservableObject {
         return services
     }
 
+    /// Cached result of `brew --prefix` to avoid repeated shell invocations.
+    private lazy var _brewPrefix: String = {
+        shellExec("brew --prefix").trimmingCharacters(in: .whitespacesAndNewlines)
+    }()
+
+    /// Returns the Homebrew prefix for the current architecture.
+    /// Uses `brew --prefix` once and caches the result.
+    private func brewPrefix() -> String {
+        _brewPrefix
+    }
+
     /// Executes a shell command via `/bin/bash -l -c` and returns stdout.
     private func shellExec(_ command: String) -> String {
         let task = Process()
@@ -356,7 +367,7 @@ final class AppLister: ObservableObject {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8) ?? ""
 
-        for line in output.components(separatedBy: .newlines).dropFirst() {
+        for line in output.components(separatedBy: .newlines) {
             let parts = line.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
             if parts.count >= 1, let pid = Int32(parts[0]), pid > 0 {
                 return pid

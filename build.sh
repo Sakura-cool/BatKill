@@ -22,6 +22,16 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dmg) BUILD_DMG=true ;;
     --arch) TARGET_ARCH="$2"; shift ;;
+    --all) ;;
+    --help|-h)
+      echo "Usage: bash build.sh [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  --arch ARCH   Build for specific architecture (arm64|x86_64)"
+      echo "  --dmg         Build and package as .dmg + .zip"
+      echo "  --all         Build for both architectures (default)"
+      echo "  --help, -h    Show this help message"
+      exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
   shift

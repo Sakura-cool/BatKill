@@ -52,7 +52,7 @@ final class ExtensionsTests: TestCase {
             var callCount = 0
             var lastValue: Int?
             
-            @State var value = 0
+            var value = 0
             let binding = Binding(
                 get: { value },
                 set: { value = $0 }

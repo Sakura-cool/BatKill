@@ -24,7 +24,7 @@ extension HardwareMonitor {
         }
 
         keys.append(("Tp0E", "CPU Die", .cpu))
-        keys.append(("Tp0b", "CPU E-Core Aggregate", .cpu))
+        keys.append(("Tp0B", "CPU E-Core Aggregate", .cpu))
 
         return keys
     }
@@ -171,13 +171,13 @@ extension HardwareMonitor {
             let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
             return Double(raw) / 4.0
         } else if dataType == HardwareMonitor.fpe2Type, bytes.count >= 2 {
-            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
             return Double(raw) / 64.0
         } else if dataType == HardwareMonitor.fp2eType, bytes.count >= 2 {
-            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
             return Double(raw) / 64.0
         } else if dataType == HardwareMonitor.fp1aType, bytes.count >= 2 {
-            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+            let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
             return Double(raw) / 1024.0
         } else if bytes.count >= 2 {
             let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])

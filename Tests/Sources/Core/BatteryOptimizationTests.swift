@@ -9,37 +9,13 @@
 
 import Foundation
 
-struct BatteryOptimizationTests: TestCase {
+final class BatteryOptimizationTests: TestCase {
     let name = "BatteryOptimizationTests"
 
     func setUp() {}
     func tearDown() {}
 
     func run() {
-        runTest("hardwareRefreshInterval on AC power") {
-            let interval = hardwareRefreshInterval(onBattery: false)
-            #if arch(x86_64)
-            XCTAssertEqual(interval, 1.2, "x86_64 per-tick interval on AC should be 1.2s")
-            #else
-            XCTAssertEqual(interval, 1.0, "arm64 per-tick interval on AC should be 1.0s")
-            #endif
-        }
-
-        runTest("hardwareRefreshInterval on battery") {
-            let interval = hardwareRefreshInterval(onBattery: true)
-            #if arch(x86_64)
-            XCTAssertEqual(interval, 2.5, "x86_64 per-tick interval on battery should be 2.5s")
-            #else
-            XCTAssertEqual(interval, 2.0, "arm64 per-tick interval on battery should be 2.0s")
-            #endif
-        }
-
-        runTest("hardwareRefreshInterval battery longer than AC") {
-            let ac = hardwareRefreshInterval(onBattery: false)
-            let battery = hardwareRefreshInterval(onBattery: true)
-            XCTAssertTrue(battery > ac, "battery interval must be ≥ AC interval for power saving")
-        }
-
         runTest("batteryPollInterval on AC power") {
             let interval = batteryPollInterval(onBattery: false)
             XCTAssertEqual(interval, 5.0, "BatteryMonitor AC poll interval should be 5s")

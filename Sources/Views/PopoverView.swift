@@ -47,6 +47,7 @@ struct PopoverView: View {
                 Image(systemName: batteryMonitor.isOnBattery ? "battery.25" : "powerplug.fill")
                     .font(.title3)
                     .foregroundColor(batteryMonitor.isOnBattery ? .orange : .green)
+                    .accessibilityLabel(batteryMonitor.isOnBattery ? lm.translate("Battery", "电池") : lm.translate("AC Power", "交流电"))
                 Text("BatKill")
                     .font(.headline)
                 Spacer()
@@ -82,18 +83,19 @@ struct PopoverView: View {
             }
 
             // ── Quick Action ──
-            // "Kill Now" button for immediate kill
-            Button {
-                processKiller.killSelected(appLister.apps) { appLister.refreshAppList() }
-            } label: {
-                Label(lm.translate("Kill Now", "立即停止"), systemImage: "bolt.fill")
-                    .font(.caption)
-                    .frame(maxWidth: .infinity)
+            // "Kill Now" button for immediate kill (only shown when there are selectable+running apps)
+            if appLister.apps.contains(where: { $0.isSelected && $0.isRunning }) {
+                Button {
+                    processKiller.killSelected(appLister.apps) { appLister.refreshAppList() }
+                } label: {
+                    Label(lm.translate("Kill Now", "立即停止"), systemImage: "bolt.fill")
+                        .font(.caption)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(processKiller.isKilling)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .disabled(processKiller.isKilling
-                || !appLister.apps.contains(where: { $0.isSelected && $0.isRunning }))
 
             // ── Status Info ──
             // Total app count and running count summary
@@ -119,14 +121,6 @@ struct PopoverView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 3)
                     .background(batteryMonitor.isOnBattery ? Color.orange : Color.blue)
-                    .clipShape(Capsule())
-            } else {
-                Text("0")
-                    .font(.title3).fontWeight(.bold)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 3)
-                    .background(Color.secondary.opacity(0.15))
                     .clipShape(Capsule())
             }
         }

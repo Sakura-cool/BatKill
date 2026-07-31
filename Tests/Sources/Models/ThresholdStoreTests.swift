@@ -5,21 +5,13 @@
 //  Tests threshold persistence, default values, and boundary conditions.
 
 import Foundation
+import Combine
 
 final class ThresholdStoreTests: TestCase {
     let name = "ThresholdStoreTests"
     
-    private let testKey = "test_fanTemperatureThreshold"
-    
-    func setUp() {
-        // Clear test key before each test
-        UserDefaults.standard.removeObject(forKey: testKey)
-    }
-    
-    func tearDown() {
-        // Clean up after tests
-        UserDefaults.standard.removeObject(forKey: testKey)
-    }
+    func setUp() {}
+    func tearDown() {}
     
     func run() {
         testDefaultThreshold()

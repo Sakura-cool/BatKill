@@ -106,6 +106,9 @@ final class HardwareMonitor: ObservableObject {
     /// reuse. This eliminates one IOConnectCallStructMethod per key per read.
     private var keyInfoCache: [String: SMCKeyInfoData] = [:]
 
+    /// Serial queue for thread-safe access to `keyInfoCache`.
+    private let smcQueue = DispatchQueue(label: "com.batkill.smc")
+
     /// Guards against overlapping `refresh()` calls. Set to `true` before
     /// dispatching to the background queue and reset to `false` on the main
     /// thread after publishing. Timer ticks that arrive during a slow SMC
@@ -348,7 +351,8 @@ final class HardwareMonitor: ObservableObject {
                 self.cpuGpuAccumulator = []
 
                 DispatchQueue.main.async {
-                    self.temperatures = batch
+                    let nonCpuGpu = self.temperatures.filter { $0.category != .cpu && $0.category != .gpu }
+                    self.temperatures = batch + nonCpuGpu
                     self.fans = cachedFans
                     self.maxCPUTemp = maxTemp
                     self.updateSmoothedCPUTemp(maxTemp)
@@ -476,7 +480,7 @@ final class HardwareMonitor: ObservableObject {
 
         // Step 1: Query key metadata — use cache if available
         let info: SMCKeyInfoData
-        if let cached = keyInfoCache[key] {
+        if let cached = smcQueue.sync(execute: { keyInfoCache[key] }) {
             info = cached
         } else {
             var getInput = SMCParamStruct()
@@ -495,7 +499,7 @@ final class HardwareMonitor: ObservableObject {
             guard getOutput.keyInfo.dataSize > 0, getOutput.keyInfo.dataSize <= 32 else { return nil }
 
             info = getOutput.keyInfo
-            keyInfoCache[key] = info
+            smcQueue.sync { keyInfoCache[key] = info }
         }
 
         // Step 2: Read the actual value using the (cached or just-fetched) metadata
@@ -539,7 +543,7 @@ final class HardwareMonitor: ObservableObject {
 
         // Use cached key metadata if available (avoids redundant IOConnect call)
         let info: SMCKeyInfoData
-        if let cached = keyInfoCache[key] {
+        if let cached = smcQueue.sync(execute: { keyInfoCache[key] }) {
             info = cached
         } else {
             var getInput = SMCParamStruct()
@@ -556,7 +560,7 @@ final class HardwareMonitor: ObservableObject {
             )
             guard kr == kIOReturnSuccess else { return false }
             info = getOutput.keyInfo
-            keyInfoCache[key] = info
+            smcQueue.sync { keyInfoCache[key] = info }
         }
 
         // Write data using the (cached or just-fetched) key info
@@ -588,10 +592,4 @@ final class HardwareMonitor: ObservableObject {
                FourCharCode(chars[2]) << 8 | FourCharCode(chars[3])
     }
 
-    /// Converts a 4-character string to a `FourCharCode` (force unwrap).
-    internal func fourCharCode(_ str: String) -> FourCharCode {
-        let chars = Array(str.utf8)
-        return FourCharCode(chars[0]) << 24 | FourCharCode(chars[1]) << 16 |
-               FourCharCode(chars[2]) << 8 | FourCharCode(chars[3])
     }
-}

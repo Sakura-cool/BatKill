@@ -232,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let hostingController = NSHostingController(rootView: contentView)
         let window = NSWindow(contentViewController: hostingController)
         window.title = "BatKill"
-        window.styleMask = NSWindow.StyleMask([.titled, .closable, .miniaturizable])
+        window.styleMask = NSWindow.StyleMask([.titled, .closable, .miniaturizable, .resizable])
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.setContentSize(NSSize(width: 500, height: 640))
@@ -260,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let hostingController = NSHostingController(rootView: contentView)
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Temperature"
-        window.styleMask = [NSWindow.StyleMask.titled, NSWindow.StyleMask.closable]
+        window.styleMask = [NSWindow.StyleMask.titled, NSWindow.StyleMask.closable, NSWindow.StyleMask.miniaturizable, NSWindow.StyleMask.resizable]
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.setContentSize(NSSize(width: 420, height: 340))
@@ -481,16 +481,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let ctx = powerActionContext ?? LogContext(name: "powerAction")
         ctx.log("操作完成，启动 \(Int(powerActionDelaySeconds))s 冷却定时器")
 
-        let msg: String
-        if onBattery {
-            msg = localizationManager.translate(
-                "Battery: will stop selected apps in \(Int(powerActionDelaySeconds))s",
-                "电池供电：\(Int(powerActionDelaySeconds))秒后停止选中程序")
-        } else {
-            msg = localizationManager.translate(
-                "AC connected: will restore stopped apps in \(Int(powerActionDelaySeconds))s",
-                "已接通电源：\(Int(powerActionDelaySeconds))秒后恢复已停止程序")
-        }
+        let msg = localizationManager.translate(
+            "Cooldown: next action in \(Int(powerActionDelaySeconds))s",
+            "冷却中：\(Int(powerActionDelaySeconds))秒后可执行下一操作")
         menuBarManager?.showBriefNotification(msg)
 
         powerDelayTimer = Timer.scheduledTimer(withTimeInterval: powerActionDelaySeconds, repeats: false) { [weak self] _ in

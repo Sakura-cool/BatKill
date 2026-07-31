@@ -16,3 +16,4 @@ Tests/.build/
 
 # OMC runtime state
 .omo/
+.omc/

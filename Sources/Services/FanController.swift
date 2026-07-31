@@ -158,6 +158,21 @@ extension HardwareMonitor {
     /// - Parameters:
     ///   - args: Command-line arguments to pass to the binary.
     ///   - completion: Called on the main thread with `true` when done.
+    /// Cached function pointer for `AuthorizationExecuteWithPrivileges`,
+    /// loaded once via `dlopen`/`dlsym` on first use. The Security framework
+    /// handle is kept alive for the lifetime of the process (no `dlclose`).
+    private typealias AuthExecFunc = @convention(c) (
+        AuthorizationRef, UnsafePointer<CChar>, AuthorizationFlags,
+        UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+        ((UnsafeMutableRawPointer?) -> Void)?
+    ) -> OSStatus
+
+    private static let authExecFunc: AuthExecFunc? = {
+        let handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW)
+        guard let sym = dlsym(handle, "AuthorizationExecuteWithPrivileges") else { return nil }
+        return unsafeBitCast(sym, to: AuthExecFunc.self)
+    }()
+
     func runWithAdmin(args: [String], completion: @escaping (Bool) -> Void) {
         guard let authRef = HardwareMonitor.authRef,
               let execPath = Bundle.main.executablePath else {
@@ -170,19 +185,20 @@ extension HardwareMonitor {
             var cArgs = args.map { strdup($0) }
             defer { cArgs.forEach { free($0) } }
 
-            // Load the deprecated AuthorizationExecuteWithPrivileges at runtime
-            typealias AuthExecFunc = @convention(c) (
-                AuthorizationRef, UnsafePointer<CChar>, AuthorizationFlags,
-                UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-                ((UnsafeMutableRawPointer?) -> Void)?
-            ) -> OSStatus
+            guard let exec = Self.authExecFunc else {
+                self?.refresh()
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
 
-            let handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW)
-            if let sym = dlsym(handle, "AuthorizationExecuteWithPrivileges") {
-                let exec = unsafeBitCast(sym, to: AuthExecFunc.self)
-            cArgs.withUnsafeMutableBufferPointer { buf in
+            let status = cArgs.withUnsafeMutableBufferPointer { buf in
                 exec(authRef, execPath, [], buf.baseAddress, nil)
             }
+
+            guard status == errAuthorizationSuccess else {
+                self?.refresh()
+                DispatchQueue.main.async { completion(false) }
+                return
             }
 
             // refresh() handles its own background/main-thread scheduling
@@ -253,7 +269,7 @@ extension HardwareMonitor {
             let raw = Int16(data.bytes[0]) << 8 | Int16(data.bytes[1])
             return Double(raw) / 4.0
         } else if dataType == HardwareMonitor.fpe2Type {
-            let raw = Int16(data.bytes[0]) << 8 | Int16(data.bytes[1])
+            let raw = UInt16(data.bytes[0]) << 8 | UInt16(data.bytes[1])
             return Double(raw) / 4.0
         } else {
             let raw = Int(data.bytes[0]) << 8 | Int(data.bytes[1])

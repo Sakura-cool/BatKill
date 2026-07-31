@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct LoggerTests: TestCase {
+final class LoggerTests: TestCase {
     let name = "LoggerTests"
 
     func setUp() {}

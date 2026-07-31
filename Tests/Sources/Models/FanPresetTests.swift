@@ -28,6 +28,7 @@ final class FanPresetTests: TestCase {
         testFanPresetAutoModeID()
         testFanPresetStoreAdd()
         testFanPresetStoreRemove()
+        testFanPresetStoreRemoveBuiltIn()
         testFanPresetStoreUpdate()
         testFanPresetStoreActivate()
         testFanPresetStoreAutoPreset()
@@ -200,6 +201,7 @@ final class FanPresetTests: TestCase {
     private func testFanPresetStoreRemoveBuiltIn() {
         runTest("FanPresetStore cannot remove built-in preset") {
             let store = FanPresetStore()
+            store.ensureAutoPreset(fanCount: 1)
             let initialCount = store.presets.count
             
             guard let builtIn = store.presets.first(where: { $0.isBuiltIn }) else {

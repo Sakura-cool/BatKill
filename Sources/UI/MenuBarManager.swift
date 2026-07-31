@@ -259,6 +259,9 @@ final class MenuBarManager: NSObject, ObservableObject {
         let showItem = menu.addItem(withTitle: loc("Show Window", "显示窗口"),
                                      action: #selector(showSettingsWindow), keyEquivalent: "")
         showItem.target = self
+        let tempItem = menu.addItem(withTitle: loc("Temperature Monitor", "温度监控"),
+                                     action: #selector(showTemperatureWindow), keyEquivalent: "")
+        tempItem.target = self
         menu.addItem(NSMenuItem.separator())
         let quitItem = menu.addItem(withTitle: loc("Quit", "退出"),
                                      action: #selector(NSApp.terminate(_:)), keyEquivalent: "q")
@@ -283,11 +286,9 @@ final class MenuBarManager: NSObject, ObservableObject {
         debugLog("[MenuBar] 更新角标: \(count)")
         
         guard let button = statusItem.button else { return }
-        DispatchQueue.main.async {
-            button.image = count > 0 ? self.renderBadgedIcon(count: count)
-                                     : NSImage(systemSymbolName: "bolt.batteryblock",
-                                               accessibilityDescription: "BatKill")
-        }
+        button.image = count > 0 ? self.renderBadgedIcon(count: count)
+                                 : NSImage(systemSymbolName: "bolt.batteryblock",
+                                           accessibilityDescription: "BatKill")
     }
 
     /// Returns a menu-bar icon with a red badge overlaid at the top-right corner.
@@ -361,6 +362,13 @@ final class MenuBarManager: NSObject, ObservableObject {
         NotificationCenter.default.post(name: .showSettings, object: nil)
     }
 
+    /// Closes the popover panel (if open) and posts the .showTemperature
+    /// notification to tell AppDelegate to open the temperature window.
+    @objc func showTemperatureWindow() {
+        closePopoverPanel()
+        NotificationCenter.default.post(name: .showTemperature, object: nil)
+    }
+
     // ──────────────────────────────────────────────
     // MARK: - Brief Notification
     // ──────────────────────────────────────────────
@@ -405,7 +413,8 @@ final class MenuBarManager: NSObject, ObservableObject {
             panel.contentView = NSView(frame: NSRect(origin: .zero, size: contentSize))
             panel.contentView?.wantsLayer = true
             panel.contentView?.layer?.cornerRadius = 6
-            panel.contentView?.layer?.backgroundColor = NSColor(white: 0.15, alpha: 0.92).cgColor
+            let isDark = NSApp.effectiveAppearance.name == .darkAqua
+            panel.contentView?.layer?.backgroundColor = (isDark ? NSColor(white: 0.15, alpha: 0.92) : NSColor(white: 0.95, alpha: 0.92)).cgColor
             panel.contentView?.addSubview(label)
             panel.contentView?.frame = NSRect(origin: .zero, size: contentSize)
             panel.setContentSize(contentSize)
@@ -419,7 +428,9 @@ final class MenuBarManager: NSObject, ObservableObject {
             let clickGesture = NSClickGestureRecognizer(target: self, action: #selector(self.notificationClicked))
             panel.contentView?.addGestureRecognizer(clickGesture)
 
+            panel.alphaValue = 0
             panel.orderFront(nil)
+            panel.animator().alphaValue = 1
             self.notificationWindow = panel
 
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in

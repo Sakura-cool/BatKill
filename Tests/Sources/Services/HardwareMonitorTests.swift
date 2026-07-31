@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct HardwareMonitorTests: TestCase {
+final class HardwareMonitorTests: TestCase {
     let name = "HardwareMonitorTests"
 
     func setUp() {}
@@ -110,28 +110,28 @@ struct HardwareMonitorTests: TestCase {
             monitor.partialRefresh()
             // Allow async dispatch to complete
             Thread.sleep(forTimeInterval: 0.1)
-            XCTAssertTrue(true, "partialRefresh() completed without crash")
+            XCTAssertTrue(monitor.temperatures.isEmpty, "temperatures should be empty without SMC")
         }
 
         runTest("partialRefresh(threshold:) no-ops gracefully without SMC") {
             let monitor = HardwareMonitor()
             monitor.partialRefresh(threshold: 85.0)
             Thread.sleep(forTimeInterval: 0.1)
-            XCTAssertTrue(true, "partialRefresh(threshold:) completed without crash")
+            XCTAssertTrue(monitor.temperatures.isEmpty, "temperatures should be empty without SMC")
         }
 
         runTest("partialRefreshCPUAndGPU() no-ops gracefully without SMC") {
             let monitor = HardwareMonitor()
             monitor.partialRefreshCPUAndGPU()
             Thread.sleep(forTimeInterval: 0.1)
-            XCTAssertTrue(true, "partialRefreshCPUAndGPU() completed without crash")
+            XCTAssertTrue(monitor.temperatures.isEmpty, "temperatures should be empty without SMC")
         }
 
         runTest("partialRefreshCPUAndGPU(threshold:) no-ops gracefully without SMC") {
             let monitor = HardwareMonitor()
             monitor.partialRefreshCPUAndGPU(threshold: 85.0)
             Thread.sleep(forTimeInterval: 0.1)
-            XCTAssertTrue(true, "partialRefreshCPUAndGPU(threshold:) completed without crash")
+            XCTAssertTrue(monitor.temperatures.isEmpty, "temperatures should be empty without SMC")
         }
 
         // ── Refresh interval tests ──

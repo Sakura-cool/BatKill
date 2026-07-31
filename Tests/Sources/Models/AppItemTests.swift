@@ -153,7 +153,7 @@ final class AppItemTests: TestCase {
                 serviceLabel: nil
             )
             
-            var app2 = AppItem(
+            let app2 = AppItem(
                 name: "App2 Different Name", // Different name
                 bundleIdentifier: "com.test.app",
                 path: "/Applications/Test.app", // Same path

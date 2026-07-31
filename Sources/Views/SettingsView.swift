@@ -135,7 +135,7 @@ struct SettingsView: View {
                         .cornerRadius(6)
 
                     Text(String(format: "%d", Int(hardwareMonitor.maxCPUTemp)))
-                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white)
                         .padding(.horizontal, 3)
                         .padding(.vertical, 1)
@@ -150,6 +150,7 @@ struct SettingsView: View {
                 .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(lm.translate("Temperature & Fan Control", "温度与风扇控制"))
             .help(lm.translate("Temperature & Fan Control", "温度与风扇控制"))
 
             // App name, version, and hardware info
@@ -210,7 +211,7 @@ struct SettingsView: View {
         let totalSize = (attrs?[.systemSize] as? UInt64) ?? 0
         let totalGB = totalSize / 1000 / 1000 / 1000
 
-        return "RAM \(ramGB)GB · ROM \(totalGB)GB"
+        return lm.translate("RAM \(ramGB)GB · ROM \(totalGB)GB", "内存 \(ramGB)GB · 磁盘 \(totalGB)GB")
     }
 
     /// Localized label for the current power source ("Battery" / "AC Power").
@@ -353,7 +354,7 @@ struct SettingsView: View {
                 .disabled(appLister.isLoading)
 
                 if appLister.isLoading {
-                    ProgressView().scaleEffect(0.5).frame(width: 12)
+                    ProgressView().controlSize(.small).frame(width: 12)
                 }
 
                 // Selected / Pending counts with sheet triggers
@@ -362,7 +363,7 @@ struct SettingsView: View {
                 HStack(spacing: 2) {
                     Button { showSelectedSheet = true } label: {
                         Text("\(lm.translate("Selected", "已选")) \(selectedCount)")
-                            .font(.caption2).foregroundColor(.secondary)
+                            .font(.caption2).foregroundColor(selectedCount > 0 ? .blue : .secondary)
                     }
                     .buttonStyle(.plain)
                     .disabled(selectedCount == 0)
@@ -414,11 +415,11 @@ struct SettingsView: View {
                           || processKiller.pendingRestoreCount == 0)
 
                 if processKiller.isKilling {
-                    ProgressView().scaleEffect(0.5).frame(width: 12)
+                    ProgressView().controlSize(.small).frame(width: 12)
                 }
 
                 if processKiller.isRestoring {
-                    ProgressView().scaleEffect(0.5).frame(width: 12)
+                    ProgressView().controlSize(.small).frame(width: 12)
                 }
             }
 
@@ -466,7 +467,7 @@ struct SettingsView: View {
                         .tint(.blue)
                     }
                 } else if versionChecker.isLoading {
-                    ProgressView().scaleEffect(0.5).frame(width: 12)
+                    ProgressView().controlSize(.small).frame(width: 12)
                 }
             }
         }
@@ -479,7 +480,7 @@ struct SettingsView: View {
     /// Toggles selection for all non-system apps. If all are currently
     /// selected, deselects all. Otherwise, selects all.
     private func toggleAll() {
-        let targets = appLister.apps.filter { !$0.isSystemApp }
+        let targets = filteredApps.filter { !$0.isSystemApp }
         let allSelected = targets.allSatisfy(\.isSelected)
         for app in targets {
             if app.isSelected == allSelected {
