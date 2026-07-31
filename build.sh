@@ -59,20 +59,22 @@ build_arch() {
 
   SWIFT_FILES=$(find "$SRC_DIR" -name '*.swift' | sort)
 
-  EXTRA_FLAGS=""
+  # ── Architecture-specific optimization flags ──
+  # arm64: enable long-function diagnostics (catches slow compilations)
+  # x86_64: enable VZEROUPPER (AVX-SSE transition penalty avoidance)
+  # Both: Ounchecked removes bounds & overflow checks for release builds
+  OPT_FLAGS="-Ounchecked -whole-module-optimization"
   if [ "$arch" = "arm64" ]; then
-    EXTRA_FLAGS="-Xfrontend -warn-long-function-bodies=1000 -Xfrontend -warn-long-expression-type-checking=1000"
+    OPT_FLAGS="$OPT_FLAGS -Xfrontend -warn-long-function-bodies=1000 -Xfrontend -warn-long-expression-type-checking=1000"
   elif [ "$arch" = "x86_64" ]; then
-    EXTRA_FLAGS="-Xllvm -x86-use-vzeroupper"
+    OPT_FLAGS="$OPT_FLAGS -Xllvm -x86-use-vzeroupper"
   fi
 
   swiftc \
     -sdk "$SDK_PATH" \
     -target "$target" \
     -parse-as-library \
-    -O \
-    -whole-module-optimization \
-    $EXTRA_FLAGS \
+    $OPT_FLAGS \
     -o "${build_dir}/${APP_NAME}" \
     $SWIFT_FILES \
     -framework SwiftUI \
