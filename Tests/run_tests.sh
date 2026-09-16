@@ -20,6 +20,21 @@ esac
 echo "🧪 Building BatKill Tests for $ARCH …"
 echo ""
 
+# ── SwiftLint 门禁（见 versions/v1.0.0/CHANGES.md CHANGE-002）──
+PROJECT_ROOT="$(cd "$TEST_DIR/.." && pwd)"
+if command -v swiftlint >/dev/null 2>&1; then
+  echo "🔍 SwiftLint 检查中（--strict）…"
+  if ! (cd "$PROJECT_ROOT" && swiftlint lint --strict --quiet --config .swiftlint.yml); then
+    echo "❌ SwiftLint 未通过，测试中止。本地可先跑：swiftlint lint --fix"
+    exit 1
+  fi
+  echo "✅ SwiftLint 通过"
+  echo ""
+else
+  echo "⚠️  未检测到 swiftlint，跳过代码扫描（安装：brew install swiftlint）"
+  echo ""
+fi
+
 # ── Collect source files ──
 # Main source files (needed for the types we're testing)
 # Exclude entry-point files (entry point is TestMain.swift)

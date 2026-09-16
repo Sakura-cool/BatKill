@@ -58,7 +58,8 @@ struct FanPreset: Codable, Identifiable, Equatable {
 
     /// Well-known UUID for the built-in "Auto" preset.
     /// This preset cannot be deleted or renamed; it represents system-default fan behavior.
-    static let autoModeID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    /// 用 `UUID(uuid:)` 直接构造，避免 `UUID(uuidString:)!` 的强制解包
+    static let autoModeID = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))
 
     /// Equality is based solely on `id` — two presets with the same ID are considered equal
     /// regardless of their current speed/mode values.

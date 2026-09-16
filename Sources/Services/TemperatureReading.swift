@@ -36,44 +36,44 @@ extension HardwareMonitor {
         for i in 0..<coreCount {
             keys.append(("TC\(i)C", "CPU Core \(i)", .cpu))
         }
-        keys.append(("TCXC", "CPU Proximity",   .cpu))
-        keys.append(("TCXD", "CPU Die",          .cpu))
-        keys.append(("TCXE", "CPU Efficiency",   .cpu))
-        keys.append(("TCXF", "CPU Performance",  .cpu))
+        keys.append(("TCXC", "CPU Proximity", .cpu))
+        keys.append(("TCXD", "CPU Die", .cpu))
+        keys.append(("TCXE", "CPU Efficiency", .cpu))
+        keys.append(("TCXF", "CPU Performance", .cpu))
         return keys
     }
 
     var commonTempKeys: [(key: String, name: String, category: TemperatureCategory)] {
         [
-            ("Tg05", "GPU",                 .gpu),
-            ("TG0P", "GPU Package",         .gpu),
-            ("TG0D", "GPU Die",             .gpu),
-            ("TG0H", "GPU Heatsink",        .gpu),
-            ("TG0M", "GPU Memory",          .gpu),
-            ("TGMR", "GPU Memory",          .gpu),
-            ("TM0P", "Memory Proximity",    .memory),
-            ("TM0S", "Memory Slot",         .memory),
-            ("TM8S", "Memory Slot 2",       .memory),
-            ("Tm01", "Memory 1",            .memory),
-            ("Tm02", "Memory 2",            .memory),
-            ("TB0T", "Battery",             .battery),
-            ("TB1T", "Battery 1",           .battery),
-            ("TB2T", "Battery 2",           .battery),
-            ("Ts0S", "SSD",                 .storage),
-            ("SM0P", "SSD Proximity",       .storage),
-            ("SM1P", "SSD 2",               .storage),
-            ("Ts0P", "SSD 0",               .storage),
-            ("Ts1P", "SSD 1",               .storage),
-            ("TA0P", "Ambient",             .ambient),
-            ("TA1P", "Ambient 2",           .ambient),
-            ("Ta0P", "Ambient Alt",         .ambient),
-            ("TH00", "Heatpipe 1",          .ambient),
-            ("TH01", "Heatpipe 2",          .ambient),
-            ("TH02", "Heatpipe 3",          .ambient),
-            ("TW0P", "WiFi",                .other),
-            ("TP0P", "Power Supply",        .other),
-            ("SP0P", "System",              .other),
-            ("TS0C", "System Controller",   .other),
+            ("Tg05", "GPU", .gpu),
+            ("TG0P", "GPU Package", .gpu),
+            ("TG0D", "GPU Die", .gpu),
+            ("TG0H", "GPU Heatsink", .gpu),
+            ("TG0M", "GPU Memory", .gpu),
+            ("TGMR", "GPU Memory", .gpu),
+            ("TM0P", "Memory Proximity", .memory),
+            ("TM0S", "Memory Slot", .memory),
+            ("TM8S", "Memory Slot 2", .memory),
+            ("Tm01", "Memory 1", .memory),
+            ("Tm02", "Memory 2", .memory),
+            ("TB0T", "Battery", .battery),
+            ("TB1T", "Battery 1", .battery),
+            ("TB2T", "Battery 2", .battery),
+            ("Ts0S", "SSD", .storage),
+            ("SM0P", "SSD Proximity", .storage),
+            ("SM1P", "SSD 2", .storage),
+            ("Ts0P", "SSD 0", .storage),
+            ("Ts1P", "SSD 1", .storage),
+            ("TA0P", "Ambient", .ambient),
+            ("TA1P", "Ambient 2", .ambient),
+            ("Ta0P", "Ambient Alt", .ambient),
+            ("TH00", "Heatpipe 1", .ambient),
+            ("TH01", "Heatpipe 2", .ambient),
+            ("TH02", "Heatpipe 3", .ambient),
+            ("TW0P", "WiFi", .other),
+            ("TP0P", "Power Supply", .other),
+            ("SP0P", "System", .other),
+            ("TS0C", "System Controller", .other)
         ]
     }
 

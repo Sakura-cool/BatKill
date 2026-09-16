@@ -8,10 +8,10 @@ import Foundation
 
 final class AppItemTests: TestCase {
     let name = "AppItemTests"
-    
+
     func setUp() {}
     func tearDown() {}
-    
+
     func run() {
         testAppItemEncoding()
         testAppItemDecoding()
@@ -22,10 +22,10 @@ final class AppItemTests: TestCase {
         testAppCategoryRawValues()
         testAppCategoryCaseIterable()
     }
-    
+
     // MARK: - AppItem Codable Tests
-    
-    private func testAppItemEncoding() {
+
+    func testAppItemEncoding() {
         runTest("AppItem encoding") {
             let app = AppItem(
                 name: "TestApp",
@@ -37,16 +37,16 @@ final class AppItemTests: TestCase {
                 category: .application,
                 serviceLabel: nil
             )
-            
+
             let encoder = JSONEncoder()
             let data = try encoder.encode(app)
-            
+
             XCTAssertNotNil(data, "Encoded data should not be nil")
-            XCTAssertTrue(data.count > 0, "Encoded data should not be empty")
+            XCTAssertTrue(!data.isEmpty, "Encoded data should not be empty")
         }
     }
-    
-    private func testAppItemDecoding() {
+
+    func testAppItemDecoding() {
         runTest("AppItem decoding") {
             let json = """
             {
@@ -60,11 +60,11 @@ final class AppItemTests: TestCase {
                 "serviceLabel": "com.test.service"
             }
             """
-            
-            let data = json.data(using: .utf8)!
+
+            let data = Data(json.utf8)
             let decoder = JSONDecoder()
             let app = try decoder.decode(AppItem.self, from: data)
-            
+
             XCTAssertEqual(app.name, "DecodedApp")
             XCTAssertEqual(app.bundleIdentifier, "com.decoded.app")
             XCTAssertEqual(app.path, "/Applications/DecodedApp.app")
@@ -75,8 +75,8 @@ final class AppItemTests: TestCase {
             XCTAssertEqual(app.serviceLabel, "com.test.service")
         }
     }
-    
-    private func testAppItemRoundTrip() {
+
+    func testAppItemRoundTrip() {
         runTest("AppItem encode/decode round trip") {
             let original = AppItem(
                 name: "RoundTripApp",
@@ -88,13 +88,13 @@ final class AppItemTests: TestCase {
                 category: .launchAgent,
                 serviceLabel: "com.roundtrip.agent"
             )
-            
+
             let encoder = JSONEncoder()
             let data = try encoder.encode(original)
-            
+
             let decoder = JSONDecoder()
             let decoded = try decoder.decode(AppItem.self, from: data)
-            
+
             XCTAssertEqual(decoded.name, original.name)
             XCTAssertEqual(decoded.bundleIdentifier, original.bundleIdentifier)
             XCTAssertEqual(decoded.path, original.path)
@@ -105,8 +105,8 @@ final class AppItemTests: TestCase {
             XCTAssertEqual(decoded.serviceLabel, original.serviceLabel)
         }
     }
-    
-    private func testAppItemCodingKeys() {
+
+    func testAppItemCodingKeys() {
         runTest("AppItem coding keys exclude transient fields") {
             let app = AppItem(
                 name: "TransientTest",
@@ -118,29 +118,30 @@ final class AppItemTests: TestCase {
                 category: .application,
                 serviceLabel: nil
             )
-            
+
             // Set transient fields
             var mutableApp = app
             mutableApp.isRunning = true
             mutableApp.pid = 12345
-            
+
             let encoder = JSONEncoder()
             let data = try encoder.encode(mutableApp)
-            let json = String(data: data, encoding: .utf8)!
-            
+            let json = String(bytes: data, encoding: .utf8) ?? ""
+            XCTAssertFalse(json.isEmpty, "编码结果应可解码为 UTF-8")
+
             // Transient fields should NOT be in JSON
             XCTAssertTrue(!json.contains("isRunning"), "isRunning should not be encoded")
             XCTAssertTrue(!json.contains("pid"), "pid should not be encoded")
-            
+
             // Verify non-transient fields ARE present
             XCTAssertTrue(json.contains("name"), "name should be encoded")
             XCTAssertTrue(json.contains("path"), "path should be encoded")
         }
     }
-    
+
     // MARK: - AppItem Equality Tests
-    
-    private func testAppItemEquality() {
+
+    func testAppItemEquality() {
         runTest("AppItem equality by path (id)") {
             let app1 = AppItem(
                 name: "App1",
@@ -152,7 +153,7 @@ final class AppItemTests: TestCase {
                 category: .application,
                 serviceLabel: nil
             )
-            
+
             let app2 = AppItem(
                 name: "App2 Different Name", // Different name
                 bundleIdentifier: "com.test.app",
@@ -163,13 +164,13 @@ final class AppItemTests: TestCase {
                 category: .application,
                 serviceLabel: nil
             )
-            
+
             // AppItem doesn't conform to Equatable directly, but id (path) should be the same
             XCTAssertEqual(app1.id, app2.id, "Same path should produce same id")
         }
     }
-    
-    private func testAppItemID() {
+
+    func testAppItemID() {
         runTest("AppItem id is path") {
             let testPath = "/Applications/MyApp.app"
             let app = AppItem(
@@ -182,14 +183,14 @@ final class AppItemTests: TestCase {
                 category: .application,
                 serviceLabel: nil
             )
-            
+
             XCTAssertEqual(app.id, testPath, "AppItem id should be the path")
         }
     }
-    
+
     // MARK: - AppCategory Tests
-    
-    private func testAppCategoryRawValues() {
+
+    func testAppCategoryRawValues() {
         runTest("AppCategory raw values") {
             XCTAssertEqual(AppCategory.application.rawValue, "Application")
             XCTAssertEqual(AppCategory.service.rawValue, "Service")
@@ -197,8 +198,8 @@ final class AppItemTests: TestCase {
             XCTAssertEqual(AppCategory.custom.rawValue, "Custom")
         }
     }
-    
-    private func testAppCategoryCaseIterable() {
+
+    func testAppCategoryCaseIterable() {
         runTest("AppCategory case iterable") {
             let allCases = AppCategory.allCases
             XCTAssertEqual(allCases.count, 4, "Should have 4 categories")

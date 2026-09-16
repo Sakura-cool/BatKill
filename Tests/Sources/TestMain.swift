@@ -21,10 +21,10 @@ struct TestMain {
         TestRunner.register("BatteryOptimizationTests") { BatteryOptimizationTests() }
         TestRunner.register("LoggerTests") { LoggerTests() }
         TestRunner.register("HardwareMonitorTests") { HardwareMonitorTests() }
-        
+
         // Run all tests
         TestRunner.runAll()
-        
+
         // Exit with appropriate code
         if TestResults.shared.allPassed {
             exit(0)

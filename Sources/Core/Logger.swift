@@ -24,28 +24,28 @@ import Foundation
 final class LogQueue {
     /// Shared singleton instance.
     static let shared = LogQueue()
-    
+
     /// Serial queue for thread-safe buffer access.
     private let queue = DispatchQueue(label: "com.batkill.logqueue")
-    
+
     /// Buffer for pending log messages.
     private var buffer: [String] = []
-    
+
     /// Maximum number of messages before auto-flush.
     private let maxBufferSize = 10
-    
+
     /// Log file path.
     private let logPath = "/tmp/batkill.log"
-    
+
     /// Whether the queue is currently flushing.
     private var isFlushing = false
-    
+
     private init() {}
-    
+
     deinit {
         flush() // Final flush on dealloc
     }
-    
+
     /// Adds a message to the buffer. Triggers flush if buffer is full.
     func enqueue(_ message: String) {
         let timestamped = formatTimestamp(message)
@@ -57,25 +57,25 @@ final class LogQueue {
             }
         }
     }
-    
+
     /// Flushes all buffered messages to disk.
     func flush() {
         queue.async { [weak self] in
             self?.flushLocked()
         }
     }
-    
+
     /// Internal flush (must be called on queue).
     private func flushLocked() {
         guard !isFlushing, !buffer.isEmpty else { return }
         isFlushing = true
-        
+
         let messages = buffer
         buffer = []
-        
+
         // Write batch to disk
         guard let data = messages.joined(separator: "\n").appending("\n").data(using: .utf8) else { return }
-        
+
         if let fh = FileHandle(forWritingAtPath: logPath) {
             fh.seekToEndOfFile()
             fh.write(data)
@@ -83,10 +83,10 @@ final class LogQueue {
         } else {
             try? data.write(to: URL(fileURLWithPath: logPath), options: .atomic)
         }
-        
+
         isFlushing = false
     }
-    
+
     /// Formats a message with ISO-style timestamp.
     private static let logDateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -99,7 +99,7 @@ final class LogQueue {
         let ts = Self.logDateFormatter.string(from: Date())
         return "[\(ts)] \(msg)"
     }
-    
+
     /// Forces an immediate synchronous flush (for critical messages).
     func flushSync() {
         queue.sync { [weak self] in
@@ -115,7 +115,7 @@ final class LogQueue {
 enum DebugLogger {
     /// Whether debug logging is currently enabled.
     static var isEnabled = false
-    
+
     /// Toggles debug logging on/off.
     static func toggle() {
         isEnabled.toggle()
@@ -186,16 +186,16 @@ private func directLog(_ msg: String) {
 final class LogContext {
     /// Short unique identifier for this operation (first 8 chars of UUID).
     let id: String
-    
+
     /// Human-readable operation name.
     let name: String
-    
+
     /// Operation start timestamp.
     let startTime: Date
-    
+
     /// Parent operation name (for nested contexts).
     let parentName: String?
-    
+
     /// Creates a new operation context.
     /// - Parameters:
     ///   - name: Operation name (used in log messages).
@@ -206,22 +206,22 @@ final class LogContext {
         self.startTime = Date()
         self.parentName = parent
     }
-    
+
     /// Logs a message within this operation context.
     /// - Parameter message: The message to log.
     func log(_ message: String) {
-        let prefix = parentName != nil ? "[\(parentName!)→\(name)]" : "[\(name)]"
+        let prefix = parentName.map { "[\($0)→\(name)]" } ?? "[\(name)]"
         logger("\(prefix) \(message)")
     }
-    
+
     /// Logs a debug message within this operation context.
     /// Only logs when debug logging is enabled.
     /// - Parameter message: The debug message to log.
     func debug(_ message: String) {
-        let prefix = parentName != nil ? "[\(parentName!)→\(name)]" : "[\(name)]"
+        let prefix = parentName.map { "[\($0)→\(name)]" } ?? "[\(name)]"
         debugLog("\(prefix) \(message)")
     }
-    
+
     /// Marks the operation as complete and logs the result.
     /// - Parameters:
     ///   - success: Whether the operation succeeded.
@@ -229,24 +229,24 @@ final class LogContext {
     func complete(success: Bool, extra: String? = nil) {
         let duration = Date().timeIntervalSince(startTime)
         let status = success ? "✅" : "❌"
-        let detail = extra != nil ? " (\(extra!))" : ""
+        let detail = extra.map { " (\($0))" } ?? ""
         logger("\(status) \(name): \(success ? "完成" : "失败") (\(formatDuration(duration))\(detail)")
     }
-    
+
     /// Logs an error and marks the operation as failed.
     /// - Parameter error: The error description.
     func fail(_ error: String) {
         complete(success: false, extra: error)
     }
-    
+
     /// Creates a child context for nested operations.
     /// - Parameter childName: Name of the child operation.
     /// - Returns: A new LogContext with this operation as parent.
     func child(_ childName: String) -> LogContext {
-        let fullParent = parentName != nil ? "\(parentName!)→\(name)" : name
+        let fullParent = [parentName, name].compactMap { $0 }.joined(separator: "→")
         return LogContext(name: childName, parent: fullParent)
     }
-    
+
     /// Formats a time interval into a human-readable string.
     private func formatDuration(_ duration: TimeInterval) -> String {
         if duration < 1.0 {

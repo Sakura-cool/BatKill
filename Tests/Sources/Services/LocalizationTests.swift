@@ -8,18 +8,18 @@ import Foundation
 
 final class LocalizationTests: TestCase {
     let name = "LocalizationTests"
-    
+
     private let originalLanguage: String
-    
+
     init() {
         // Save original language preference
         originalLanguage = UserDefaults.standard.string(forKey: "appLanguage") ?? ""
     }
-    
+
     func setUp() {
         // Don't modify UserDefaults to avoid affecting other tests
     }
-    
+
     func tearDown() {
         // Restore original language
         if originalLanguage.isEmpty {
@@ -28,7 +28,7 @@ final class LocalizationTests: TestCase {
             UserDefaults.standard.set(originalLanguage, forKey: "appLanguage")
         }
     }
-    
+
     func run() {
         testLanguageRawValues()
         testLanguageDisplayName()
@@ -38,27 +38,27 @@ final class LocalizationTests: TestCase {
         testLocFunction()
         testLocFunctionWithArgs()
     }
-    
+
     // MARK: - Language Enum Tests
-    
-    private func testLanguageRawValues() {
+
+    func testLanguageRawValues() {
         runTest("Language raw values") {
             XCTAssertEqual(Language.english.rawValue, "en")
             XCTAssertEqual(Language.chinese.rawValue, "zh-Hans")
         }
     }
-    
-    private func testLanguageDisplayName() {
+
+    func testLanguageDisplayName() {
         runTest("Language display names") {
             XCTAssertEqual(Language.english.displayName, "English")
             XCTAssertEqual(Language.chinese.displayName, "简体中文")
         }
     }
-    
-    private func testLanguageDefault() {
+
+    func testLanguageDefault() {
         runTest("Language default detection") {
             let defaultLang = Language.default
-            
+
             // Check system preferred language
             if let preferred = Locale.preferredLanguages.first {
                 if preferred.hasPrefix("zh") {
@@ -71,16 +71,16 @@ final class LocalizationTests: TestCase {
             }
         }
     }
-    
+
     // MARK: - LocalizationManager Tests
-    
-    private func testLocalizationManagerTranslate() {
+
+    func testLocalizationManagerTranslate() {
         runTest("LocalizationManager translate simple strings") {
             let lm = LocalizationManager.shared
-            
+
             // Test translation based on current language
             let result = lm.translate("Hello", "你好")
-            
+
             if lm.currentLanguage == .chinese {
                 XCTAssertEqual(result, "你好", "Should return Chinese when language is Chinese")
             } else {
@@ -88,13 +88,13 @@ final class LocalizationTests: TestCase {
             }
         }
     }
-    
-    private func testLocalizationManagerTranslateWithArgs() {
+
+    func testLocalizationManagerTranslateWithArgs() {
         runTest("LocalizationManager translate with format arguments") {
             let lm = LocalizationManager.shared
-            
+
             let result = lm.translate("%d items", "%d 个项目", 5)
-            
+
             if lm.currentLanguage == .chinese {
                 XCTAssertEqual(result, "5 个项目", "Should format Chinese string")
             } else {
@@ -102,14 +102,14 @@ final class LocalizationTests: TestCase {
             }
         }
     }
-    
+
     // MARK: - loc() Function Tests
-    
-    private func testLocFunction() {
+
+    func testLocFunction() {
         runTest("loc() function translates strings") {
             let lm = LocalizationManager.shared
             let result = loc("Test", "测试")
-            
+
             if lm.currentLanguage == .chinese {
                 XCTAssertEqual(result, "测试")
             } else {
@@ -117,12 +117,12 @@ final class LocalizationTests: TestCase {
             }
         }
     }
-    
-    private func testLocFunctionWithArgs() {
+
+    func testLocFunctionWithArgs() {
         runTest("loc() function with format arguments") {
             let lm = LocalizationManager.shared
             let result = loc("Count: %d", "数量: %d", 42)
-            
+
             if lm.currentLanguage == .chinese {
                 XCTAssertEqual(result, "数量: 42")
             } else {

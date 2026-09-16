@@ -73,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Power-Action Queue
 
+    // 三态语义（nil=无等待 / true=电池动作 / false=交流电动作），见 AGENTS.md「注意事项」；非可选布尔误用
+    // swiftlint:disable discouraged_optional_boolean
     /// Coalesced power action waiting to be processed.
     /// - `nil`: no action pending
     /// - `true`: battery -- kill selected apps
@@ -82,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// `queuePowerAction(isOnBattery:)` simply overwrite this value.
     /// Only the **final** state is ever acted upon.
     private var pendingPowerAction: Bool?
+    // swiftlint:enable discouraged_optional_boolean
 
     /// True while a kill or restore operation is in flight. Prevents
     /// overlapping operations from racing.
@@ -452,7 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         pendingPowerAction = nil
         powerActionInProgress = true
-        
+
         let ctx = powerActionContext ?? LogContext(name: "powerAction")
         let actionCtx = ctx.child(onBattery ? "killSelected" : "restoreKilledApps")
         actionCtx.log("开始执行 \(onBattery ? "终止" : "恢复") 操作")
@@ -477,7 +480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func onPowerActionCompleted(onBattery: Bool) {
         powerActionInProgress = false
-        
+
         let ctx = powerActionContext ?? LogContext(name: "powerAction")
         ctx.log("操作完成，启动 \(Int(powerActionDelaySeconds))s 冷却定时器")
 

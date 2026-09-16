@@ -17,36 +17,36 @@ import Foundation
 /// Tracks test execution results and provides summary reporting.
 final class TestResults {
     static let shared = TestResults()
-    
+
     private var passed: Int = 0
     private var failed: Int = 0
     private var errors: [(test: String, message: String)] = []
-    
+
     func recordPass() { passed += 1 }
     func recordFail(test: String, message: String) {
         failed += 1
         errors.append((test: test, message: message))
     }
-    
+
     func summary() -> String {
         let total = passed + failed
         var result = "\n═══════════════════════════════════════════\n"
         result += "  TEST RESULTS: \(passed)/\(total) passed"
         if failed > 0 { result += ", \(failed) FAILED" }
         result += "\n═══════════════════════════════════════════\n"
-        
+
         for error in errors {
             result += "  ❌ \(error.test): \(error.message)\n"
         }
-        
+
         if failed == 0 && passed > 0 {
             result += "  ✅ All tests passed!\n"
         }
-        
+
         result += "═══════════════════════════════════════════\n"
         return result
     }
-    
+
     var allPassed: Bool { failed == 0 }
 }
 
@@ -106,7 +106,8 @@ func XCTAssertNil<T>(_ value: T?, _ message: String = "", file: String = #file, 
         TestResults.shared.recordPass()
     } else {
         let testName = "\(file):\(line)"
-        let msg = message.isEmpty ? "Expected value to be nil, got \(value!)" : message
+        let got = value.map { String(describing: $0) } ?? "nil"
+        let msg = message.isEmpty ? "Expected value to be nil, got \(got)" : message
         TestResults.shared.recordFail(test: testName, message: msg)
         print("  ❌ FAIL: \(msg)")
     }
@@ -151,16 +152,16 @@ protocol TestCase {
 /// Executes registered test cases and reports results.
 enum TestRunner {
     private static var testCases: [String: () -> TestCase] = [:]
-    
+
     /// Register a test case class.
     static func register(_ name: String, _ factory: @escaping () -> TestCase) {
         testCases[name] = factory
     }
-    
+
     /// Run all registered tests.
     static func runAll() {
         print("\n🧪 Running BatKill Unit Tests...\n")
-        
+
         for (name, factory) in testCases.sorted(by: { $0.key < $1.key }) {
             print("── \(name) ──")
             let testCase = factory()
@@ -169,23 +170,23 @@ enum TestRunner {
             testCase.tearDown()
             print("")
         }
-        
+
         print(TestResults.shared.summary())
     }
-    
+
     /// Run a specific test case by name.
     static func runTest(_ name: String) {
         guard let factory = testCases[name] else {
             print("❌ Test '\(name)' not found")
             return
         }
-        
+
         print("\n🧪 Running: \(name)\n")
         let testCase = factory()
         testCase.setUp()
         testCase.run()
         testCase.tearDown()
-        
+
         print(TestResults.shared.summary())
     }
 }

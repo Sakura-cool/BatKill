@@ -42,8 +42,8 @@ final class MenuBarManager: NSObject, ObservableObject {
     /// The popover panel and its hosting controller, created lazily on first
     /// click and destroyed on close. Keeping either alive while hidden causes
     /// AppKit to run display-cycle layout passes on the SwiftUI hierarchy.
-    private var popoverPanel: NSPanel? = nil
-    private var hostingController: NSHostingController<AnyView>? = nil
+    private var popoverPanel: NSPanel?
+    private var hostingController: NSHostingController<AnyView>?
 
     /// Monitors clicks outside the popover panel to dismiss it.
     private var eventMonitor: Any?
@@ -196,8 +196,7 @@ final class MenuBarManager: NSObject, ObservableObject {
             popoverPanel = panel
 
             // ── Event monitor: close on click outside (global) ──
-            eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
-                [weak self] event in
+            eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
                 guard let self = self,
                       let panel = self.popoverPanel,
                       panel.isVisible,
@@ -284,7 +283,7 @@ final class MenuBarManager: NSObject, ObservableObject {
         guard count != lastBadgeCount else { return }
         lastBadgeCount = count
         debugLog("[MenuBar] 更新角标: \(count)")
-        
+
         guard let button = statusItem.button else { return }
         button.image = count > 0 ? self.renderBadgedIcon(count: count)
                                  : NSImage(systemSymbolName: "bolt.batteryblock",
@@ -312,7 +311,9 @@ final class MenuBarManager: NSObject, ObservableObject {
 
         // ── Base SF Symbol ──
         // Render the bolt.batteryblock icon and tint it based on appearance
-        let base = NSImage(systemSymbolName: "bolt.batteryblock", accessibilityDescription: nil)!
+        // 取不到 SF Symbol 时退回空白底图，保证角标仍能渲染（不因符号缺失崩溃）
+        let base = NSImage(systemSymbolName: "bolt.batteryblock", accessibilityDescription: nil)
+            ?? NSImage(size: size)
         var baseRect = CGRect(origin: .zero, size: size)
         if let cg = base.cgImage(forProposedRect: &baseRect, context: nil, hints: nil) {
             ctx.saveGState()

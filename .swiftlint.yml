@@ -1,0 +1,51 @@
+# BatKill — SwiftLint 配置
+# 引入时间：2026-09-16（见 versions/v1.0.0/CHANGES.md CHANGE-002）
+#
+# 策略：棘轮（ratchet）。长度/规模类阈值取引入时的代码基线略上浮，先把现状锁住、禁止新增同类问题；
+#       等拆分大文件（TemperatureView.swift 980 行、ProcessKiller/FanPreset 等）后逐条收紧到规范值。
+#
+# 用法：
+#   swiftlint lint --strict     # 门禁模式（build.sh / Tests/run_tests.sh 已接入）
+#   swiftlint lint --fix        # 自动修复格式类问题（行尾空白、逗号空格、else 位置等）
+
+disabled_rules:
+  - identifier_name    # 现有代码大量短名（i/j/k/f/d/ts/lm…），批量重命名风险高于收益，重构时再开启
+  - large_tuple        # SMC 数据结构按 C 结构体镜像定义（SMCKeyData_t 的 6/16/24 元组），非设计缺陷
+  - for_where          # 2 处，纯可读性偏好，后续统一
+  - todo
+
+opt_in_rules:
+  - force_unwrapping
+  - force_cast
+  - force_try
+  - empty_count
+  - unused_closure_parameter
+  - discouraged_optional_boolean
+  - duplicate_imports
+  - legacy_constructor
+
+line_length:
+  warning: 160         # 基线最大 154（AppDelegate.swift:449）
+  error: 200
+  ignores_comments: true
+
+file_length:
+  warning: 1000        # 基线最大 980（TemperatureView.swift），拆分后收紧到 400
+  error: 1500
+
+type_body_length:
+  warning: 750         # 基线最大 703（TemperatureView.swift:31）
+  error: 1000
+
+function_body_length:
+  warning: 130         # 基线最大 120（TemperatureView.swift:677）
+  error: 200
+
+cyclomatic_complexity:
+  warning: 20
+  error: 30
+
+excluded:
+  - .build
+  - .package
+  - Tests/.build

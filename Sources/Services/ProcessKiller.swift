@@ -257,18 +257,14 @@ final class ProcessKiller: ObservableObject {
                 return app.name
             }
             return (appId as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
-        }
-
-        else if let app = apps.first(where: { $0.id == appId }), app.category == .launchAgent {
+        } else if let app = apps.first(where: { $0.id == appId }), app.category == .launchAgent {
             let proc = Process()
             proc.launchPath = "/bin/launchctl"
             proc.arguments = ["bootstrap", "gui/\(getuid())", app.path]
             try? proc.run()
             proc.waitUntilExit()
             return app.name
-        }
-
-        else if let app = apps.first(where: { $0.id == appId }), app.category == .service {
+        } else if let app = apps.first(where: { $0.id == appId }), app.category == .service {
             // Restore original KeepAlive if BatKill patched it during kill
             if let label = app.serviceLabel {
                 let restored = restoreKeepAlive(label: label)
@@ -299,7 +295,7 @@ final class ProcessKiller: ObservableObject {
                 task.waitUntilExit()
                 if task.terminationStatus == 0 { return app.name }
             }
-            
+
             // Strategy 3: Try launchctl bootstrap with the service plist
             if let label = app.serviceLabel {
                 let plistPath = findPlistPath(for: label)
@@ -314,7 +310,7 @@ final class ProcessKiller: ObservableObject {
                     if proc.terminationStatus == 0 { return app.name }
                 }
             }
-            
+
             return nil
         }
 
@@ -579,7 +575,7 @@ final class ProcessKiller: ObservableObject {
     private func findPlistPath(for label: String) -> String? {
         let userAgentsDir = NSHomeDirectory() + "/Library/LaunchAgents"
         let fm = FileManager.default
-        
+
         if let contents = try? fm.contentsOfDirectory(atPath: userAgentsDir) {
             for item in contents where item.hasSuffix(".plist") {
                 let fullPath = "\(userAgentsDir)/\(item)"
@@ -590,7 +586,7 @@ final class ProcessKiller: ObservableObject {
                 }
             }
         }
-        
+
         return nil
     }
 

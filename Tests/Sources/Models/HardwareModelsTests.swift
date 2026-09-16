@@ -8,10 +8,10 @@ import Foundation
 
 final class HardwareModelsTests: TestCase {
     let name = "HardwareModelsTests"
-    
+
     func setUp() {}
     func tearDown() {}
-    
+
     func run() {
         testTemperatureCategoryRawValues()
         testTemperatureCategoryCaseIterable()
@@ -26,10 +26,10 @@ final class HardwareModelsTests: TestCase {
         testSMCParamStructDefaults()
         testSMCCommandConstants()
     }
-    
+
     // MARK: - TemperatureCategory Tests
-    
-    private func testTemperatureCategoryRawValues() {
+
+    func testTemperatureCategoryRawValues() {
         runTest("TemperatureCategory raw values") {
             XCTAssertEqual(TemperatureCategory.cpu.rawValue, "CPU")
             XCTAssertEqual(TemperatureCategory.gpu.rawValue, "GPU")
@@ -40,8 +40,8 @@ final class HardwareModelsTests: TestCase {
             XCTAssertEqual(TemperatureCategory.other.rawValue, "Other")
         }
     }
-    
-    private func testTemperatureCategoryCaseIterable() {
+
+    func testTemperatureCategoryCaseIterable() {
         runTest("TemperatureCategory case iterable") {
             let allCases = TemperatureCategory.allCases
             XCTAssertEqual(allCases.count, 7, "Should have 7 categories")
@@ -54,8 +54,8 @@ final class HardwareModelsTests: TestCase {
             XCTAssertTrue(allCases.contains(.other))
         }
     }
-    
-    private func testTemperatureCategorySystemImage() {
+
+    func testTemperatureCategorySystemImage() {
         runTest("TemperatureCategory system images") {
             XCTAssertEqual(TemperatureCategory.cpu.systemImage, "cpu")
             XCTAssertEqual(TemperatureCategory.gpu.systemImage, "display")
@@ -66,33 +66,33 @@ final class HardwareModelsTests: TestCase {
             XCTAssertEqual(TemperatureCategory.other.systemImage, "gearshape")
         }
     }
-    
-    private func testTemperatureCategoryLocalizedName() {
+
+    func testTemperatureCategoryLocalizedName() {
         runTest("TemperatureCategory localized names") {
             XCTAssertEqual(TemperatureCategory.cpu.localizedName.en, "CPU")
             XCTAssertEqual(TemperatureCategory.cpu.localizedName.zh, "处理器")
-            
+
             XCTAssertEqual(TemperatureCategory.gpu.localizedName.en, "GPU")
             XCTAssertEqual(TemperatureCategory.gpu.localizedName.zh, "显卡")
-            
+
             XCTAssertEqual(TemperatureCategory.memory.localizedName.en, "Memory")
             XCTAssertEqual(TemperatureCategory.memory.localizedName.zh, "内存")
-            
+
             XCTAssertEqual(TemperatureCategory.battery.localizedName.en, "Battery")
             XCTAssertEqual(TemperatureCategory.battery.localizedName.zh, "电池")
-            
+
             XCTAssertEqual(TemperatureCategory.storage.localizedName.en, "Storage")
             XCTAssertEqual(TemperatureCategory.storage.localizedName.zh, "存储")
-            
+
             XCTAssertEqual(TemperatureCategory.ambient.localizedName.en, "Ambient")
             XCTAssertEqual(TemperatureCategory.ambient.localizedName.zh, "环境")
-            
+
             XCTAssertEqual(TemperatureCategory.other.localizedName.en, "Other")
             XCTAssertEqual(TemperatureCategory.other.localizedName.zh, "其他")
         }
     }
-    
-    private func testTemperatureCategoryID() {
+
+    func testTemperatureCategoryID() {
         runTest("TemperatureCategory id matches raw value") {
             XCTAssertEqual(TemperatureCategory.cpu.id, "CPU")
             XCTAssertEqual(TemperatureCategory.gpu.id, "GPU")
@@ -103,35 +103,35 @@ final class HardwareModelsTests: TestCase {
             XCTAssertEqual(TemperatureCategory.other.id, "Other")
         }
     }
-    
+
     // MARK: - TemperatureGroup Tests
-    
-    private func testTemperatureGroupAverage() {
+
+    func testTemperatureGroupAverage() {
         runTest("TemperatureGroup average calculation") {
             let sensors = [
                 TemperatureSensor(key: "Tp01", name: "Core 1", temperature: 65.0, category: .cpu),
                 TemperatureSensor(key: "Tp02", name: "Core 2", temperature: 70.0, category: .cpu),
                 TemperatureSensor(key: "Tp03", name: "Core 3", temperature: 75.0, category: .cpu)
             ]
-            
+
             let group = TemperatureGroup(category: .cpu, sensors: sensors)
-            
+
             XCTAssertEqualWithAccuracy(group.average, 70.0, accuracy: 0.01,
                                        "Average of 65, 70, 75 should be 70")
         }
     }
-    
-    private func testTemperatureGroupAverageEmpty() {
+
+    func testTemperatureGroupAverageEmpty() {
         runTest("TemperatureGroup average with no sensors") {
             let group = TemperatureGroup(category: .cpu, sensors: [])
-            
+
             XCTAssertEqual(group.average, 0, "Average of empty group should be 0")
         }
     }
-    
+
     // MARK: - TemperatureSensor Tests
-    
-    private func testTemperatureSensorInitialization() {
+
+    func testTemperatureSensorInitialization() {
         runTest("TemperatureSensor initialization") {
             let sensor = TemperatureSensor(
                 key: "TCPU",
@@ -139,7 +139,7 @@ final class HardwareModelsTests: TestCase {
                 temperature: 72.5,
                 category: .cpu
             )
-            
+
             XCTAssertNotNil(sensor.id, "Should have auto-generated UUID")
             XCTAssertEqual(sensor.key, "TCPU")
             XCTAssertEqual(sensor.name, "CPU Package")
@@ -147,10 +147,10 @@ final class HardwareModelsTests: TestCase {
             XCTAssertEqual(sensor.category, .cpu)
         }
     }
-    
+
     // MARK: - FanInfo Tests
-    
-    private func testFanInfoInitialization() {
+
+    func testFanInfoInitialization() {
         runTest("FanInfo initialization") {
             let fan = FanInfo(
                 index: 0,
@@ -160,7 +160,7 @@ final class HardwareModelsTests: TestCase {
                 currentSpeed: 3500,
                 isAutoMode: true
             )
-            
+
             XCTAssertNotNil(fan.id, "Should have auto-generated UUID")
             XCTAssertEqual(fan.index, 0)
             XCTAssertEqual(fan.name, "Left")
@@ -170,31 +170,31 @@ final class HardwareModelsTests: TestCase {
             XCTAssertTrue(fan.isAutoMode)
         }
     }
-    
+
     // MARK: - SMC Data Structure Tests
-    
-    private func testSMCKeyInfoDataDefaults() {
+
+    func testSMCKeyInfoDataDefaults() {
         runTest("SMCKeyInfoData default values") {
             let info = SMCKeyInfoData()
-            
+
             XCTAssertEqual(info.dataSize, 0)
             XCTAssertEqual(info.dataType, 0)
             XCTAssertEqual(info.dataAttributes, 0)
         }
     }
-    
-    private func testSMCParamStructDefaults() {
+
+    func testSMCParamStructDefaults() {
         runTest("SMCParamStruct default values") {
             let param = SMCParamStruct()
-            
+
             XCTAssertEqual(param.key, 0)
             XCTAssertEqual(param.data8, 0)
             XCTAssertEqual(param.result, 0)
             XCTAssertEqual(param.status, 0)
         }
     }
-    
-    private func testSMCCommandConstants() {
+
+    func testSMCCommandConstants() {
         runTest("SMC command constants") {
             XCTAssertEqual(kSMCReadKey, 5)
             XCTAssertEqual(kSMCWriteKey, 6)

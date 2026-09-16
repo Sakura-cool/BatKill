@@ -88,8 +88,7 @@ final class AppLister: ObservableObject {
 
         let path = apps[idx].id
         var paths = selectedPaths
-        if apps[idx].isSelected { paths.insert(path) }
-        else { paths.remove(path) }
+        if apps[idx].isSelected { paths.insert(path) } else { paths.remove(path) }
         selectedPaths = paths
     }
 
@@ -109,7 +108,7 @@ final class AppLister: ObservableObject {
         let appDirs: [(path: String, isSystem: Bool)] = [
             ("/Applications", false),
             (NSHomeDirectory() + "/Applications", false),
-            ("/System/Applications", true),
+            ("/System/Applications", true)
         ]
 
         for (dir, isSystem) in appDirs {
@@ -344,7 +343,7 @@ final class AppLister: ObservableObject {
 
             let label = "homebrew.mxcl.\(name)"
             let pid = self.brewServicePID(name)
-            let isRunning = pid != nil && pid! > 0
+            let isRunning = (pid ?? 0) > 0
             services.append((name, label, isRunning, pid))
         }
         return services
@@ -373,7 +372,7 @@ final class AppLister: ObservableObject {
                 return pid
             }
         }
-        
+
         // Fallback: try pgrep for exact process name match
         let pgrep = Process()
         pgrep.launchPath = "/usr/bin/pgrep"
@@ -388,12 +387,12 @@ final class AppLister: ObservableObject {
         if let pid = pgrepOutput.components(separatedBy: .newlines).first.flatMap({ Int32($0) }), pid > 0 {
             return pid
         }
-        
+
         // Special case: Colima's Docker daemon runs under a different process name
         if FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.colima/default/docker.sock") {
             return 1
         }
-        
+
         return nil
     }
 }

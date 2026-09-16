@@ -37,6 +37,19 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# ── SwiftLint 门禁（见 versions/v1.0.0/CHANGES.md CHANGE-002）──
+# 未安装 swiftlint 时仅告警不阻塞；安装后必须 `swiftlint lint --strict` 通过
+if command -v swiftlint >/dev/null 2>&1; then
+  echo "🔍 SwiftLint 检查中（--strict）…"
+  if ! swiftlint lint --strict --quiet --config .swiftlint.yml; then
+    echo "❌ SwiftLint 未通过，构建中止。本地可先跑：swiftlint lint --fix"
+    exit 1
+  fi
+  echo "✅ SwiftLint 通过"
+else
+  echo "⚠️  未检测到 swiftlint，跳过代码扫描（安装：brew install swiftlint）"
+fi
+
 # ── Determine architectures to build ──
 NATIVE_ARCH="$(uname -m)"
 if [ -n "$TARGET_ARCH" ]; then
