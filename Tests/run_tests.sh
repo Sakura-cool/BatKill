@@ -20,7 +20,7 @@ esac
 echo "🧪 Building BatKill Tests for $ARCH …"
 echo ""
 
-# ── SwiftLint 门禁（见 versions/v1.0.0/CHANGES.md CHANGE-002）──
+# ── SwiftLint 门禁（见 versions/v0.1.0/CHANGES.md CHANGE-002）──
 PROJECT_ROOT="$(cd "$TEST_DIR/.." && pwd)"
 if command -v swiftlint >/dev/null 2>&1; then
   echo "🔍 SwiftLint 检查中（--strict）…"

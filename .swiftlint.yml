@@ -1,5 +1,5 @@
 # BatKill — SwiftLint 配置
-# 引入时间：2026-09-16（见 versions/v1.0.0/CHANGES.md CHANGE-002）
+# 引入时间：2026-09-16（见 versions/v0.1.0/CHANGES.md CHANGE-002）
 #
 # 策略：棘轮（ratchet）。长度/规模类阈值取引入时的代码基线略上浮，先把现状锁住、禁止新增同类问题；
 #       等拆分大文件（TemperatureView.swift 980 行、ProcessKiller/FanPreset 等）后逐条收紧到规范值。

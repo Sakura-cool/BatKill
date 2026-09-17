@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# ── SwiftLint 门禁（见 versions/v1.0.0/CHANGES.md CHANGE-002）──
+# ── SwiftLint 门禁（见 versions/v0.1.0/CHANGES.md CHANGE-002）──
 # 未安装 swiftlint 时仅告警不阻塞；安装后必须 `swiftlint lint --strict` 通过
 if command -v swiftlint >/dev/null 2>&1; then
   echo "🔍 SwiftLint 检查中（--strict）…"
