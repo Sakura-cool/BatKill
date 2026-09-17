@@ -21,6 +21,7 @@ struct TestMain {
         TestRunner.register("BatteryOptimizationTests") { BatteryOptimizationTests() }
         TestRunner.register("LoggerTests") { LoggerTests() }
         TestRunner.register("HardwareMonitorTests") { HardwareMonitorTests() }
+        TestRunner.register("ProcessRunnerTests") { ProcessRunnerTests() }
 
         // Run all tests
         TestRunner.runAll()

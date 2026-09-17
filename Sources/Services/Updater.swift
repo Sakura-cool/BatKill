@@ -232,66 +232,76 @@ final class Updater: ObservableObject {
             try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
 
-            // Mount dmg
-            try runShell("hdiutil attach \"\(tempURL.path)\" -nobrowse -mountpoint \"\(mountPoint.path)\" 2>/dev/null")
+            // Mount dmg（v0.1.6 FIX-001：具体二进制 + 参数数组，不经 shell）
+            try ProcessRunner.run(executable: "/usr/bin/hdiutil",
+                                  arguments: ["attach", tempURL.path, "-nobrowse",
+                                              "-mountpoint", mountPoint.path])
 
             // Find .app in mounted volume
             guard let appPath = findApp(in: mountPoint) else {
-                try? runShell("hdiutil detach \"\(mountPoint.path)\" 2>/dev/null")
+                _ = try? ProcessRunner.run(executable: "/usr/bin/hdiutil",
+                                           arguments: ["detach", mountPoint.path])
                 logger("Updater: no .app found in dmg")
                 DispatchQueue.main.async { self.statusMessage = "Update failed: app not found" }
                 return
             }
 
-            try runShell("ditto \"\(appPath.path)\" \"\(tmpDir.path)/\(appPath.lastPathComponent)\"")
             let newAppPath = tmpDir.appendingPathComponent(appPath.lastPathComponent)
+            try ProcessRunner.run(executable: "/usr/bin/ditto",
+                                  arguments: [appPath.path, newAppPath.path])
 
             // Detach dmg
-            try runShell("hdiutil detach \"\(mountPoint.path)\" 2>/dev/null")
+            _ = try? ProcessRunner.run(executable: "/usr/bin/hdiutil",
+                                       arguments: ["detach", mountPoint.path])
 
             let currentAppPath = Bundle.main.bundlePath
 
             // Background update script: wait for exit, replace bundle, relaunch
+            // v0.1.6 FIX-001：路径一律经参数传入（$1/$2/$3），脚本正文不插值外部数据
             let script = """
             #!/bin/bash
+            # $1 = 新 app 路径　$2 = 当前 app 路径　$3 = 临时目录
             # Wait for the running process to fully exit
             while pgrep -x BatKill > /dev/null 2>&1; do
                 sleep 0.5
             done
 
             # Remove quarantine from the NEW app BEFORE copying (recursive)
-            xattr -rd com.apple.quarantine "\(newAppPath.path)" 2>/dev/null || true
+            xattr -rd com.apple.quarantine "$1" 2>/dev/null || true
 
             # Remove old bundle
-            rm -rf "\(currentAppPath)"
+            rm -rf "$2"
 
             # Copy clean bundle to original location
-            ditto "\(newAppPath.path)" "\(currentAppPath)"
+            ditto "$1" "$2"
 
             # Ensure executable permission
-            chmod +x "\(currentAppPath)/Contents/MacOS/BatKill"
+            chmod +x "$2/Contents/MacOS/BatKill"
 
             # Double-check: remove quarantine on final location too
-            xattr -rd com.apple.quarantine "\(currentAppPath)" 2>/dev/null || true
+            xattr -rd com.apple.quarantine "$2" 2>/dev/null || true
 
             # Relaunch
-            open "\(currentAppPath)"
+            open "$2"
 
             # Cleanup temp
-            rm -rf "\(tmpDir.path)"
+            rm -rf "$3"
             """
 
             let scriptPath = tmpDir.appendingPathComponent("update.sh")
             try script.write(toFile: scriptPath.path, atomically: true, encoding: .utf8)
-            try runShell("chmod +x \"\(scriptPath.path)\"")
+            // 可执行权限：用 FileManager 设置（替代 `chmod +x` 进程调用）
+            try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                  ofItemAtPath: scriptPath.path)
 
             logger("Updater: launching background update script, then terminating")
 
-            // Launch the update script detached from the current process
-            let bg = Process()
-            bg.executableURL = URL(fileURLWithPath: "/bin/bash")
-            bg.arguments = ["-c", "nohup \"\(scriptPath.path)\" > /dev/null 2>&1 &"]
-            try bg.run()
+            // Launch the update script detached from the current process.
+            // 脚本带 shebang，直接执行（不经 `bash -c` 命令文本），参数数组传递。
+            _ = try ProcessRunner.runDetached(executable: scriptPath.path,
+                                              arguments: [newAppPath.path,
+                                                          currentAppPath,
+                                                          tmpDir.path])
 
             // Give the background script time to start, then terminate
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -323,15 +333,6 @@ final class Updater: ObservableObject {
             }
         }
         return nil
-    }
-
-    /// Executes a shell command synchronously via `/bin/zsh -c`.
-    private func runShell(_ script: String) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", script]
-        try process.run()
-        process.waitUntilExit()
     }
 
     /// Returns the current CPU architecture string ("arm64" or "x86_64").
