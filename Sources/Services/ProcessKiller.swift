@@ -273,27 +273,27 @@ final class ProcessKiller: ObservableObject {
                 }
             }
 
-            // Strategy 1: Try direct start command
-            let directStart = Process()
-            directStart.executableURL = URL(fileURLWithPath: "/bin/bash")
-            directStart.arguments = ["-l", "-c", "\(app.processName) start"]
-            directStart.standardOutput = Pipe()
-            directStart.standardError = Pipe()
-            if (try? directStart.run()) != nil {
-                directStart.waitUntilExit()
-                if directStart.terminationStatus == 0 { return app.name }
+            // Strategy 1: 直接以服务可执行文件启动（v0.1.6 FIX-001：不经 shell，参数数组传递）
+            if let executable = ProcessRunner.resolveExecutable(named: app.processName) {
+                if let result = try? ProcessRunner.run(executable: executable, arguments: ["start"]),
+                   result.succeeded {
+                    return app.name
+                }
+            } else {
+                logger("restoreSingleApp: 未找到可执行文件 \(app.processName)，跳过直接启动策略")
             }
 
-            // Strategy 2: Try brew services start (for homebrew-managed services)
+            // Strategy 2: brew services start（homebrew 托管服务；直调 brew 二进制 + 白名单校验）
             if app.serviceLabel?.hasPrefix("homebrew.mxcl.") == true {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/bin/bash")
-                task.arguments = ["-l", "-c", "brew services start \(app.processName)"]
-                task.standardOutput = Pipe()
-                task.standardError = Pipe()
-                try? task.run()
-                task.waitUntilExit()
-                if task.terminationStatus == 0 { return app.name }
+                if let brew = ProcessRunner.brewPath(),
+                   ProcessRunner.isValidExternalIdentifier(app.processName),
+                   let result = try? ProcessRunner.run(executable: brew,
+                                                       arguments: ["services", "start", app.processName],
+                                                       environment: ProcessRunner.defaultSearchEnvironment),
+                   result.succeeded {
+                    return app.name
+                }
+                logger("restoreSingleApp: brew services start 未成功或服务名未通过白名单：\(app.processName)")
             }
 
             // Strategy 3: Try launchctl bootstrap with the service plist
@@ -431,13 +431,11 @@ final class ProcessKiller: ObservableObject {
     ///                               re-registers → clean exit sticks ✓
     private func stopService(_ app: AppItem) -> Bool {
         // ── Pass 1: Try to stop the process ──
-        let directStop = Process()
-        directStop.executableURL = URL(fileURLWithPath: "/bin/bash")
-        directStop.arguments = ["-l", "-c", "\(app.processName) stop"]
-        directStop.standardOutput = Pipe()
-        directStop.standardError = Pipe()
-        if (try? directStop.run()) != nil {
-            directStop.waitUntilExit()
+        // v0.1.6 FIX-001：改直调服务可执行文件（不经 shell 命令文本）
+        if let executable = ProcessRunner.resolveExecutable(named: app.processName) {
+            _ = try? ProcessRunner.run(executable: executable, arguments: ["stop"])
+        } else {
+            logger("stopService: 未找到可执行文件 \(app.processName)，跳过直接停止策略")
         }
         killProcessByName(app.processName)
 

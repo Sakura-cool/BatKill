@@ -31,8 +31,16 @@ func handleCLIArgs() -> Bool {
 
     // --set-fan <fanIndex> <speedRPM>
     // Sets the fan to manual mode at the given RPM, then exits.
+    // v0.1.6 FIX-002：提权入口收口——参数做白名单与范围校验，非法请求拒绝执行（exit 1）
     if args[1] == "--set-fan", args.count == 4 {
-        guard let fanIndex = Int(args[2]), let speed = Double(args[3]) else { return false }
+        guard let fanIndex = Int(args[2]), fanIndex >= 0, maxFanIndex >= fanIndex else {
+            logger("CLIFanWriter: 非法风扇索引参数 \(args[2])，提权写入被拒绝")
+            exit(1)
+        }
+        guard let speed = Double(args[3]), speed.isFinite, speed >= 0, speed <= maxFanSpeedRPM else {
+            logger("CLIFanWriter: 非法转速参数 \(args[3])（允许 0...\(Int(maxFanSpeedRPM))），提权写入被拒绝")
+            exit(1)
+        }
         let monitor = HardwareMonitor()
         monitor.setFanMode(fanIndex: fanIndex, auto: false)
         _ = monitor.setFanSpeed(fanIndex: fanIndex, speed: speed)
@@ -42,7 +50,14 @@ func handleCLIArgs() -> Bool {
     // --set-fan-mode <fanIndex> <0|1>
     // 0 = automatic, 1 = manual. Then exits.
     if args[1] == "--set-fan-mode", args.count == 4 {
-        guard let fanIndex = Int(args[2]), let mode = Int(args[3]) else { return false }
+        guard let fanIndex = Int(args[2]), fanIndex >= 0, maxFanIndex >= fanIndex else {
+            logger("CLIFanWriter: 非法风扇索引参数 \(args[2])，提权写入被拒绝")
+            exit(1)
+        }
+        guard let mode = Int(args[3]), mode == 0 || mode == 1 else {
+            logger("CLIFanWriter: 非法模式参数 \(args[3])（允许 0/1），提权写入被拒绝")
+            exit(1)
+        }
         let monitor = HardwareMonitor()
         _ = monitor.setFanMode(fanIndex: fanIndex, auto: mode == 0)
         exit(monitor.lastFanWriteOK ? 0 : 1)
@@ -50,3 +65,11 @@ func handleCLIArgs() -> Bool {
 
     return false
 }
+
+// MARK: - CLI 参数白名单（v0.1.6 FIX-002）
+
+/// 提权入口允许的最大风扇索引（SMC 实际风扇数远小于此值，仅作上界防护）。
+private let maxFanIndex = 15
+
+/// 提权入口允许的最大转速（RPM）；真实上界由各风扇的 `F{i}Mx` 决定。
+private let maxFanSpeedRPM: Double = 20000

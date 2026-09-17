@@ -10,11 +10,46 @@
 //    logger("Some event happened")  // Always logs (if debug enabled)
 //    debugLog("Detailed info")      // Only logs when debug enabled
 //
-//  View:   tail -f /tmp/batkill.log
+//  View:   tail -f ~/Library/Logs/BatKill/batkill.log
 //
 //  Extracted from: BatteryMonitor.swift
 
 import Foundation
+
+// MARK: - Log File Location
+
+/// 日志文件位置（v0.1.6 FIX-003）。
+///
+/// 0.1.5 及以前固定写 `/tmp/batkill.log`：`/tmp` 是全局可写目录且文件名可预测，
+/// 存在符号链接劫持（覆盖任意可写文件）与同机其他用户可读的信息泄漏风险。
+/// 现在写入用户私有目录 `~/Library/Logs/BatKill/`（目录权限 0700）；
+/// 若该目录不可写（如受限环境），降级到系统临时目录，保证日志功能不中断。
+enum LogFile {
+    /// 降级路径：仅当用户私有目录不可写时使用。
+    static let fallbackURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("batkill.log", isDirectory: false)
+
+    /// 实际使用的日志文件路径（进程内固定，避免日志分散到两个文件）。
+    static let url: URL = {
+        let manager = FileManager.default
+        let base = manager.urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? manager.homeDirectoryForCurrentUser.appendingPathComponent("Library", isDirectory: true)
+        let directory = base.appendingPathComponent("Logs/BatKill", isDirectory: true)
+        do {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true,
+                                        attributes: [.posixPermissions: 0o700])
+            // 目录已存在时也把权限收紧到 0700
+            try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        } catch {
+            return fallbackURL
+        }
+        guard manager.isWritableFile(atPath: directory.path) else { return fallbackURL }
+        return directory.appendingPathComponent("batkill.log", isDirectory: false)
+    }()
+
+    /// 日志文件路径字符串。
+    static var path: String { url.path }
+}
 
 // MARK: - Log Queue (Batch Writer)
 
@@ -34,8 +69,8 @@ final class LogQueue {
     /// Maximum number of messages before auto-flush.
     private let maxBufferSize = 10
 
-    /// Log file path.
-    private let logPath = "/tmp/batkill.log"
+    /// Log file path（v0.1.6 FIX-003：用户私有目录，见 `LogFile`）。
+    private let logPath = LogFile.path
 
     /// Whether the queue is currently flushing.
     private var isFlushing = false
@@ -158,13 +193,14 @@ func criticalLog(_ msg: String) {
 private func directLog(_ msg: String) {
     let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
     let line = "[\(ts)] \(msg)\n"
+    let path = LogFile.path
     if let data = line.data(using: .utf8) {
-        if let fh = FileHandle(forWritingAtPath: "/tmp/batkill.log") {
+        if let fh = FileHandle(forWritingAtPath: path) {
             fh.seekToEndOfFile()
             fh.write(data)
             try? fh.close()
         } else {
-            try? data.write(to: URL(fileURLWithPath: "/tmp/batkill.log"), options: .atomic)
+            try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
         }
     }
 }

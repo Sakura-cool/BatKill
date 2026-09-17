@@ -303,9 +303,14 @@ final class AppLister: ObservableObject {
         return services
     }
 
-    /// Cached result of `brew --prefix` to avoid repeated shell invocations.
+    /// Cached result of `brew --prefix`（v0.1.6 FIX-001：直调 brew 二进制，不经 shell）。
     private lazy var _brewPrefix: String = {
-        shellExec("brew --prefix").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let brew = ProcessRunner.brewPath(),
+              let result = try? ProcessRunner.run(executable: brew,
+                                                  arguments: ["--prefix"],
+                                                  environment: ProcessRunner.defaultSearchEnvironment)
+        else { return "" }
+        return result.output.trimmingCharacters(in: .whitespacesAndNewlines)
     }()
 
     /// Returns the Homebrew prefix for the current architecture.
@@ -314,24 +319,15 @@ final class AppLister: ObservableObject {
         _brewPrefix
     }
 
-    /// Executes a shell command via `/bin/bash -l -c` and returns stdout.
-    private func shellExec(_ command: String) -> String {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/bash")
-        task.arguments = ["-l", "-c", command]
-        let out = Pipe()
-        task.standardOutput = out
-        task.standardError = Pipe()
-        guard (try? task.run()) != nil else { return "" }
-        task.waitUntilExit()
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
-    }
-
     /// Returns all brew services (running or stopped) via `brew services list`.
     /// For each service, also queries its PID via launchctl and pgrep.
     private func brewAllServices() -> [(name: String, label: String, isRunning: Bool, pid: Int32?)] {
-        let output = shellExec("brew services list")
+        guard let brew = ProcessRunner.brewPath(),
+              let result = try? ProcessRunner.run(executable: brew,
+                                                  arguments: ["services", "list"],
+                                                  environment: ProcessRunner.defaultSearchEnvironment)
+        else { return [] }
+        let output = result.output
         var services: [(String, String, Bool, Int32?)] = []
 
         for line in output.components(separatedBy: .newlines).dropFirst() {

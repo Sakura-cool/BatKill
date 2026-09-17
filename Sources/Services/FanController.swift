@@ -176,6 +176,14 @@ extension HardwareMonitor {
     func runWithAdmin(args: [String], completion: @escaping (Bool) -> Void) {
         guard let authRef = HardwareMonitor.authRef,
               let execPath = Bundle.main.executablePath else {
+            logger("FanController: 提权通道不可用（未授权或取不到可执行路径），写入被拒绝")
+            completion(false)
+            return
+        }
+
+        // v0.1.6 FIX-002（方案 B 收口）：符号缺失时显式失败并记录，不静默
+        guard let exec = Self.authExecFunc else {
+            logger("FanController: AuthorizationExecuteWithPrivileges 不可用（系统已废弃该 API），提权写入被拒绝")
             completion(false)
             return
         }
@@ -185,17 +193,12 @@ extension HardwareMonitor {
             var cArgs = args.map { strdup($0) }
             defer { cArgs.forEach { free($0) } }
 
-            guard let exec = Self.authExecFunc else {
-                self?.refresh()
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-
             let status = cArgs.withUnsafeMutableBufferPointer { buf in
                 exec(authRef, execPath, [], buf.baseAddress, nil)
             }
 
             guard status == errAuthorizationSuccess else {
+                logger("FanController: 提权执行失败（OSStatus \(status)）")
                 self?.refresh()
                 DispatchQueue.main.async { completion(false) }
                 return
@@ -211,15 +214,42 @@ extension HardwareMonitor {
 
     /// Sets a fan to automatic or manual mode using admin privileges.
     /// Passes `--set-fan-mode {index} {mode}` to the elevated binary.
+    ///
+    /// v0.1.6 FIX-002：写入前校验风扇索引（白名单 + 实际风扇数），非法请求直接拒绝。
     func setFanModeWithAdmin(fanIndex: Int, auto: Bool, completion: @escaping (Bool) -> Void) {
+        let fans = readFans()
+        guard fans.contains(where: { $0.index == fanIndex }) else {
+            logger("FanController: 非法风扇索引 \(fanIndex)（检测到 \(fans.count) 个风扇），写入被拒绝")
+            completion(false)
+            return
+        }
         let mode = auto ? 0 : 1
         runWithAdmin(args: ["--set-fan-mode", "\(fanIndex)", "\(mode)"], completion: completion)
     }
 
     /// Sets a fan's target speed using admin privileges.
     /// Passes `--set-fan {index} {speed}` to the elevated binary.
+    ///
+    /// v0.1.6 FIX-002：校验风扇索引并做转速范围校验（收敛到该风扇的 [min, max]），
+    /// 非法数值（NaN/负数）直接拒绝，避免越界写入 SMC。
     func setFanSpeedWithAdmin(fanIndex: Int, speed: Double, completion: @escaping (Bool) -> Void) {
-        runWithAdmin(args: ["--set-fan", "\(fanIndex)", "\(Int(speed))"], completion: completion)
+        guard speed.isFinite, speed >= 0 else {
+            logger("FanController: 非法转速请求 \(speed)，写入被拒绝")
+            completion(false)
+            return
+        }
+        let fans = readFans()
+        guard let fan = fans.first(where: { $0.index == fanIndex }) else {
+            logger("FanController: 非法风扇索引 \(fanIndex)（检测到 \(fans.count) 个风扇），写入被拒绝")
+            completion(false)
+            return
+        }
+        let target = min(max(speed, fan.minSpeed), fan.maxSpeed)
+        if target != speed {
+            logger("FanController: 转速 \(Int(speed)) 超出范围 "
+                + "[\(Int(fan.minSpeed)), \(Int(fan.maxSpeed))]，已收敛为 \(Int(target))")
+        }
+        runWithAdmin(args: ["--set-fan", "\(fanIndex)", "\(Int(target))"], completion: completion)
     }
 
     // MARK: - Fan Reading
