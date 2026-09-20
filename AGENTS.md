@@ -1,6 +1,6 @@
 # BatKill — 项目知识库
 
-**更新日期:** 2026-09-16
+**更新日期:** 2026-09-20
 **版本:** v0.1.6
 **技术栈:** Swift 5 / SwiftUI / AppKit / IOKit / Combine / AuthorizationServices
 **目标系统:** macOS 14.0+ (arm64 + x86_64)
@@ -124,6 +124,7 @@ BatKill/
 - **电源动作队列** — 通过合并中间状态实现去抖 + 操作完成后冷却延时（30秒延迟），禁止内联调用
 - **管理员授权** — 通过 `AuthorizationServices` 实现一次性会话授权（`AuthorizationCreate` + `AuthorizationCopyRights`）
 - **SMC 写入** — 风扇转速 `fpe2` 类型需 ×4 写入；`flt` 类型使用 Float32 编码
+- **代码风格** — **SwiftLint 是唯一风格门禁**（`.swiftlint.yml` 已接入 `build.sh` / `Tests/run_tests.sh` 的 `--strict` 模式）。**swift-format 不是本项目风格工具**：项目无 `.swift-format` 配置，其默认 2 空格缩进与项目 4 空格规范冲突，禁止用 `swift-format --in-place` 批量重排代码（会产生大量无关 diff）
 
 ## 单元测试
 

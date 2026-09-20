@@ -12,8 +12,8 @@
 //
 //  Extracted from: Models.swift
 
-import Foundation
 import Combine
+import Foundation
 
 // MARK: - Saved State
 
