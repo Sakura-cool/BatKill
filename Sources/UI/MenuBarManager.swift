@@ -170,15 +170,8 @@ final class MenuBarManager: NSObject, ObservableObject {
             panel.isMovable = false
             panel.collectionBehavior = [.transient, .ignoresCycle, .moveToActiveSpace]
 
-            // ── Vibrancy background (matches NSPopover look) ──
-            let effectView = NSVisualEffectView()
-            effectView.material = .hudWindow
-            effectView.state = .active
-            effectView.blendingMode = .behindWindow
-            effectView.isEmphasized = true
-            effectView.wantsLayer = true
-            effectView.layer?.cornerRadius = 10
-            effectView.layer?.masksToBounds = true
+            // ── Popover background (system popover material + adaptive border) ──
+            let effectView = PopoverBackgroundView(frame: .zero)
             panel.contentView = effectView
 
             // ── Host the SwiftUI view on top of the vibrancy ──
@@ -452,3 +445,37 @@ final class MenuBarManager: NSObject, ObservableObject {
 }
 
 // Notification.Name extensions are defined centrally in Core/Extensions.swift
+
+/// Popover background using the system `.popover` material with a subtle
+/// border that follows the current appearance (light/dark).
+private final class PopoverBackgroundView: NSVisualEffectView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        material = .popover
+        blendingMode = .behindWindow
+        state = .active
+        isEmphasized = true
+        wantsLayer = true
+        layer?.cornerRadius = 12
+        layer?.masksToBounds = true
+        layer?.borderWidth = 1
+        updateBorderColor()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBorderColor()
+    }
+
+    private func updateBorderColor() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.borderColor = (isDark
+            ? NSColor.white.withAlphaComponent(0.14)
+            : NSColor.black.withAlphaComponent(0.12)).cgColor
+    }
+}
