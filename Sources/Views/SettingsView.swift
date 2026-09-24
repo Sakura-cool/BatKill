@@ -7,7 +7,7 @@
 //  battery power.
 //
 //  Layout structure (top to bottom):
-//    1. Header     -- power icon, app name, version, hardware info, status badge
+//    1. Header     -- power icon, temp badge, hardware info, power status, status badge
 //    2. Auto-Kill  -- toggle switch for automatic kill on battery
 //    3. Filter Bar -- search field + running/system toggles
 //    4. App List   -- scrollable list of AppRowView items
@@ -112,16 +112,9 @@ struct SettingsView: View {
     // MARK: - Header
     // ──────────────────────────────────────────────
 
-    /// Top section showing power status icon, temperature badge, app name,
-    /// version, hardware info, and a battery/AC status pill.
+    /// Top section showing temperature badge, hardware info, and a battery/AC status pill.
     private var header: some View {
         HStack(spacing: 12) {
-            // Power state icon with pulse animation
-            Image(systemName: batteryMonitor.isOnBattery ? "battery.25" : "powerplug.fill")
-                .font(.system(size: 28))
-                .foregroundColor(batteryMonitor.isOnBattery ? .orange : .green)
-                .symbolEffect(.pulse, value: batteryMonitor.isOnBattery)
-
             // Temperature badge -- tapping opens the Temperature window
             Button {
                 NotificationCenter.default.post(name: .showTemperature, object: nil)
@@ -153,21 +146,17 @@ struct SettingsView: View {
             .accessibilityLabel(lm.translate("Temperature & Fan Control", "温度与风扇控制"))
             .help(lm.translate("Temperature & Fan Control", "温度与风扇控制"))
 
-            // App name, version, and hardware info
-            VStack(alignment: .leading, spacing: 2) {
+            // Hardware info as primary line + power status (app name + version moved to title bar)
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text("BatKill").font(.title2).fontWeight(.semibold)
-                    Text("\(versionChecker.currentVersion)")
+                    Text(archLabel)
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                    Text(hardwareInfo)
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.secondary.opacity(0.12))
-                        .cornerRadius(4)
                 }
-                Text("\(archLabel) · \(hardwareInfo)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
                 Text(powerStatusText)
                     .font(.caption)
                     .foregroundColor(.secondary)

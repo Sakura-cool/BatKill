@@ -234,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let hostingController = NSHostingController(rootView: contentView)
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "BatKill"
+        window.title = "BatKill \(versionChecker.currentVersion)"
         window.styleMask = NSWindow.StyleMask([.titled, .closable, .miniaturizable, .resizable])
         window.isReleasedWhenClosed = false
         window.delegate = self
