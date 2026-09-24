@@ -414,14 +414,15 @@ struct SettingsView: View {
 
             // Bottom row: language + auto-start + update
             HStack(spacing: 8) {
-                // Language segmented picker
+                // Language segmented picker (compact, matches Auto-start size)
                 Picker("", selection: $lm.currentLanguage) {
                     ForEach(Language.allCases, id: \.self) { lang in
                         Text(lang.displayName).tag(lang)
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 200)
+                .controlSize(.small)
+                .font(.caption)
 
                 Spacer()
 
