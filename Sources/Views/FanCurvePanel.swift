@@ -110,6 +110,19 @@ struct FanCurvePanel: View {
                         .position(x: min(xFor(temp: current, plot: plot, curve: curve) + 8,
                                          plot.x1 - 14),
                                   y: plot.y0 + 8)
+                    // Current-speed marker (red horizontal line + label)
+                    Rectangle()
+                        .fill(Color.red.opacity(0.5))
+                        .frame(width: plot.x1 - plot.x0, height: 1.5)
+                        .position(x: (plot.x0 + plot.x1) / 2,
+                                  y: yFor(speed: fan.currentSpeed, plot: plot, bounds: bounds))
+                    Text("\(Int(fan.currentSpeed)) RPM")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 3)
+                        .background(Color(NSColor.windowBackgroundColor).opacity(0.7))
+                        .position(x: plot.x1 - 6,
+                                  y: yFor(speed: fan.currentSpeed, plot: plot, bounds: bounds))
                     // Tappable nodes (+ inline editor on selection)
                     nodes(plot: plot, curve: curve, maxStep: maxStep, bounds: bounds)
                 }
