@@ -54,6 +54,15 @@ struct FanPreset: Codable, Identifiable, Equatable {
     /// `true` = automatic (system-managed), `false` = manual (user-controlled speed).
     var fanAutoModes: [Int: Bool]
 
+    /// Per-fan manual sub-mode (定速/调速) keyed by fan index (v0.2.0).
+    /// Absent entries fall back to `.fixed`. Optional so legacy presets decode.
+    var fanManualSubModes: [Int: ManualSubMode]?
+
+    /// Per-fan temperature curves keyed by fan index (v0.2.0).
+    /// Only meaningful when `fanManualSubModes[i] == .curve`. Optional for
+    /// backward compatibility with the pre-v0.2.0 preset format.
+    var fanCurves: [Int: FanCurve]?
+
     // MARK: - Built-in Preset
 
     /// Well-known UUID for the built-in "Auto" preset.
@@ -190,6 +199,8 @@ final class FanPresetStore: ObservableObject {
         if let idx = presets.firstIndex(where: { $0.id == preset.id }) {
             presets[idx].fanSpeeds = preset.fanSpeeds
             presets[idx].fanAutoModes = preset.fanAutoModes
+            presets[idx].fanManualSubModes = preset.fanManualSubModes
+            presets[idx].fanCurves = preset.fanCurves
             save()
         }
     }

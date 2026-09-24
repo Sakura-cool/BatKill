@@ -43,6 +43,18 @@ struct FanCurvePanel: View {
         .id(curve.threshold)   // re-render when threshold/step count changes
     }
 
+    /// Adaptive vertical grid step so the chart shows ~5 bands (not dense
+    /// 100-RPM lines): picks from 100/200/500/1000/2000 based on range.
+    private var yStep: Double {
+        let bounds = chartBounds(for: currentCurve)
+        let range = bounds.maxY - bounds.minY
+        for step in [100.0, 200.0, 500.0, 1000.0, 2000.0]
+        where range / step <= 5.0 {
+            return step
+        }
+        return 2000.0
+    }
+
     private var currentCurve: FanCurve {
         curveStore.curve(for: fan.index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
     }
@@ -76,8 +88,8 @@ struct FanCurvePanel: View {
             GeometryReader { geo in
                 let plot = plotRect(geo: geo, bounds: bounds)
                 ZStack {
-                    // Horizontal grid (speed), step 100 RPM, adaptive range.
-                    ForEach(Array(stride(from: bounds.minY, through: bounds.maxY, by: 100)), id: \.self) { speed in
+                    // Horizontal grid (speed), adaptive step ~5 bands.
+                    ForEach(Array(stride(from: bounds.minY, through: bounds.maxY, by: yStep)), id: \.self) { speed in
                         yGridLine(plot: plot, speed: speed)
                         Text("\(Int(speed / 100))")          // 300 → "3"
                             .font(.system(size: 8, design: .monospaced))
@@ -145,7 +157,7 @@ struct FanCurvePanel: View {
                 Button {
                     onApplySpeed?(targetSpeed)
                 } label: {
-                    Label(lm.translate("Apply", "生效"), systemImage: "checkmark.circle.fill")
+                    Label(lm.translate("Set Speed", "设定转速"), systemImage: "checkmark.circle.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -219,13 +231,16 @@ struct FanCurvePanel: View {
             } else {
                 Circle()
                     .fill(Color.blue)
-                    .frame(width: 10, height: 10)
+                    .frame(width: 12, height: 12)
+                    .contentShape(Circle())
                     .position(x: x, y: y)
                     .onTapGesture {
                         editingStep = k
                         editText = String(format: "%d", Int(speed))
                         editError = nil
                     }
+                    .gesture(dragGesture(step: k, curve: curve,
+                                         plot: plot, bounds: bounds))
             }
         }
     }
@@ -279,7 +294,7 @@ struct FanCurvePanel: View {
         }
         var updated = currentCurve
         updated.stepSpeeds[step] = min(max(value, fan.minSpeed), fan.maxSpeed)
-        curveStore.setCurve(updated.smoothed(), for: fan.index)
+        curveStore.storeCurveRaw(updated, for: fan.index)   // per-step independent
         editingStep = nil
         editText = ""
         editError = nil
@@ -331,5 +346,34 @@ struct FanCurvePanel: View {
         let range = bounds.maxY - bounds.minY
         let ratio = CGFloat(min(max(speed, bounds.minY), bounds.maxY) - bounds.minY) / CGFloat(range)
         return plot.y1 - ratio * (plot.y1 - plot.y0)
+    }
+
+    /// Inverse of `yFor`: converts a drag y position back to a speed (RPM).
+    private func speedFor(y: CGFloat, plot: PlotRect,
+                          bounds: (minY: Double, maxY: Double)) -> Double {
+        let range = bounds.maxY - bounds.minY
+        let ratio = (plot.y1 - y) / (plot.y1 - plot.y0)
+        return bounds.minY + Double(ratio) * range
+    }
+
+    /// Drag gesture on a curve node: dragging vertically updates that step's
+    /// speed live (in-memory only), releasing applies smoothing and persists.
+    private func dragGesture(step: Int, curve: FanCurve,
+                             plot: PlotRect,
+                             bounds: (minY: Double, maxY: Double)) -> some Gesture {
+        DragGesture(minimumDistance: 3)
+            .onChanged { value in
+                editingStep = nil   // dismiss any inline editor while dragging
+                let newSpeed = min(max(speedFor(y: value.location.y,
+                                                plot: plot, bounds: bounds),
+                                       fan.minSpeed),
+                                   fan.maxSpeed)
+                var updated = curve
+                updated.stepSpeeds[step] = newSpeed
+                curveStore.setCurveLive(updated, for: fan.index)
+            }
+            .onEnded { _ in
+                curveStore.save()   // persist the dragged curve once
+            }
     }
 }

@@ -265,6 +265,31 @@ final class FanCurveStore: ObservableObject {
         save()
     }
 
+    /// Updates the curve in memory only (no UserDefaults write). Used by the
+    /// chart's drag gesture on every position change; callers persist on end.
+    func setCurveLive(_ curve: FanCurve, for index: Int) {
+        curves[index] = curve   // raw: in-memory drag preview, no clamp
+    }
+
+    /// Persists a curve exactly as edited (independent per-step values; the
+    /// monotonic clamp is NOT applied so users can set each temp node freely).
+    func storeCurveRaw(_ curve: FanCurve, for index: Int) {
+        curves[index] = curve
+        save()
+    }
+
+    /// Applies preset per-fan sub-modes and curves so the fan-control UI
+    /// switches to the matching sub-mode (定速 slider vs 调速 curve chart).
+    func applyPresetSubModes(_ subModes: [Int: ManualSubMode]?,
+                             curves presetCurves: [Int: FanCurve]?) {
+        for (index, mode) in subModes ?? [:] {
+            setSubMode(mode, for: index)
+        }
+        for (index, curve) in presetCurves ?? [:] {
+            setCurve(curve, for: index)
+        }
+    }
+
     /// Last successfully written curve target speed (for write de-duplication).
     func lastWrittenSpeed(for index: Int) -> Double? {
         lastWrittenSpeeds[index]

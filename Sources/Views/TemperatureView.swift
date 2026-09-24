@@ -91,14 +91,12 @@ struct TemperatureView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header with title and refresh button
             header
                 .padding()
                 .background(Color(NSColor.windowBackgroundColor))
             Divider()
 
             if !hardwareMonitor.isAvailable {
-                // SMC access denied or unavailable
                 unavailableView
             } else {
                 ScrollView {
@@ -322,8 +320,7 @@ struct TemperatureView: View {
                     step: 1
                 ) {
                     HStack(spacing: 2) {
-                        // Direct text input for the threshold value
-                        TextField("60-120", text: $thresholdInput)
+                                    TextField("60-120", text: $thresholdInput)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.caption, design: .monospaced))
                             .frame(width: 36)
@@ -683,12 +680,10 @@ struct TemperatureView: View {
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                // Fan name
                 Text(fan.name)
                     .font(.caption).fontWeight(.medium)
                     .frame(width: 80, alignment: .leading)
 
-                // Current speed readout
                 Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -707,8 +702,7 @@ struct TemperatureView: View {
                     },
                     set: { newValue in
                         let wantsManual = newValue != 0
-                        // Block manual mode if thermally throttled
-                        if wantsManual && hardwareMonitor.thermalThrottled { return }
+                                        if wantsManual && hardwareMonitor.thermalThrottled { return }
                         fanManualModes[fan.index] = wantsManual
                         if newValue == 2 {
                             curveStore.setSubMode(.curve, for: fan.index)
@@ -744,7 +738,6 @@ struct TemperatureView: View {
                 .frame(width: 180)
             }
 
-            // Manual mode controls (hidden when auto or thermally throttled)
             if isManual && !hardwareMonitor.thermalThrottled {
                 if curveStore.subMode(for: fan.index) == .curve {
                     FanCurvePanel(
@@ -754,8 +747,7 @@ struct TemperatureView: View {
                         onApplySpeed: { _ in self.applyCurveSpeed(for: fan) },
                         statusMessage: fanWriteStatus[fan.index],
                         needsAdmin: fanNeedsAdmin[fan.index] == true,
-                        onAuthorize: { self.authorizeCurveFan(for: fan) }
-                    )
+                        onAuthorize: { self.authorizeCurveFan(for: fan) })
                 } else {
                 FanFixedSpeedControls(
                     fan: fan,
@@ -768,33 +760,9 @@ struct TemperatureView: View {
                     statusMessage: fanWriteStatus[fan.index],
                     needsAdmin: fanNeedsAdmin[fan.index] == true,
                     onSetSpeed: { speed in
-                        if hardwareMonitor.isAdminAuthorized {
-                            hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
-                                fanWriteStatus[fan.index] = ok
-                                    ? lm.translate("Set (Admin)", "已设定(管理员)")
-                                    : lm.translate("Failed", "失败")
-                            }
-                        } else {
-                            fanNeedsAdmin[fan.index] = true
-                        }
+                        self.writeFixedSpeed(speed, for: fan.index)
                     },
-                    onAuthorize: {
-                        // Explicit user action — reset denied state so the
-                        // auth dialog actually appears.
-                        HardwareMonitor.resetAuthDenied()
-                        if hardwareMonitor.requestAdminAuth() {
-                            bringAppToFront()
-                            fanNeedsAdmin[fan.index] = nil
-                            let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
-                            hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
-                                fanWriteStatus[fan.index] = ok
-                                    ? lm.translate("Set (Admin)", "已设定(管理员)")
-                                    : lm.translate("Admin Failed", "管理员授权失败")
-                            }
-                        } else {
-                            fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
-                        }
-                    }
+                    onAuthorize: { self.authorizeFixedFan(for: fan.index) }
                 )
                 }
             }
@@ -811,7 +779,6 @@ struct TemperatureView: View {
     ///
     /// Static because it runs from the refresh timer's escaping closure
     /// (which captures stores weakly, not the SwiftUI view instance).
-    /// Curve-mode "生效": write the target speed, or surface the admin button.
     private func applyCurveSpeed(for fan: FanInfo) {
         if hardwareMonitor.isAdminAuthorized {
             let target = curveStore.targetSpeed(for: fan.index,
@@ -827,7 +794,6 @@ struct TemperatureView: View {
         }
     }
 
-    /// Curve-mode admin authorization flow (explicit user action).
     private func authorizeCurveFan(for fan: FanInfo) {
         HardwareMonitor.resetAuthDenied()
         if hardwareMonitor.requestAdminAuth() {
@@ -836,6 +802,30 @@ struct TemperatureView: View {
             applyCurveSpeed(for: fan)
         } else {
             fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
+        }
+    }
+
+    private func writeFixedSpeed(_ speed: Double, for index: Int) {
+        if hardwareMonitor.isAdminAuthorized {
+            hardwareMonitor.setFanSpeedWithAdmin(fanIndex: index, speed: speed) { ok in
+                fanWriteStatus[index] = ok
+                    ? lm.translate("Set (Admin)", "已设定(管理员)")
+                    : lm.translate("Failed", "失败")
+            }
+        } else {
+            fanNeedsAdmin[index] = true
+        }
+    }
+
+    private func authorizeFixedFan(for index: Int) {
+        HardwareMonitor.resetAuthDenied()
+        if hardwareMonitor.requestAdminAuth() {
+            bringAppToFront()
+            fanNeedsAdmin[index] = nil
+            let speed = fanPendingSpeeds[index] ?? 0
+            writeFixedSpeed(speed, for: index)
+        } else {
+            fanWriteStatus[index] = lm.translate("Auth Denied", "授权被拒绝")
         }
     }
 
@@ -891,7 +881,8 @@ struct TemperatureView: View {
     private func executePreset(_ preset: FanPreset) {
         presetStore.activate(preset)
 
-        // Apply auto/manual modes
+        curveStore.applyPresetSubModes(preset.fanManualSubModes,
+                                      curves: preset.fanCurves)
         for (index, isAuto) in preset.fanAutoModes {
             fanManualModes[index] = !isAuto
             if isAuto {
@@ -899,8 +890,6 @@ struct TemperatureView: View {
                 fanWriteStatus[index] = lm.translate("Auto mode restored", "已恢复自动")
             }
         }
-
-        // Apply speeds for manual-mode fans
         for (index, speed) in preset.fanSpeeds {
             fanPendingSpeeds[index] = speed
             if preset.fanAutoModes[index] != true {
@@ -918,11 +907,23 @@ struct TemperatureView: View {
     private func saveCurrentAsPreset() {
         var speeds: [Int: Double] = [:]
         var autoModes: [Int: Bool] = [:]
+        var subModes: [Int: ManualSubMode] = [:]
+        var curves: [Int: FanCurve] = [:]
         for fan in hardwareMonitor.fans {
             speeds[fan.index] = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
             autoModes[fan.index] = !(fanManualModes[fan.index] ?? false)
+            subModes[fan.index] = curveStore.subMode(for: fan.index)
+            if subModes[fan.index] == .curve {
+                curves[fan.index] = curveStore.curve(for: fan.index,
+                                                     minSpeed: fan.minSpeed,
+                                                     maxSpeed: fan.maxSpeed)
+            }
         }
-        let preset = FanPreset(name: newPresetName, fanSpeeds: speeds, fanAutoModes: autoModes)
+        let preset = FanPreset(name: newPresetName,
+                               fanSpeeds: speeds,
+                               fanAutoModes: autoModes,
+                               fanManualSubModes: subModes,
+                               fanCurves: curves)
         presetStore.add(preset)
         presetStore.activate(preset)
         newPresetName = ""
