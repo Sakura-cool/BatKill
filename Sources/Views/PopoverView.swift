@@ -42,11 +42,8 @@ struct PopoverView: View {
     var body: some View {
         VStack(spacing: 12) {
             // ── Header ──
-            // App title + badge count (power icon moved to the status row)
+            // Badge count only, right-aligned (app name is not shown here)
             HStack {
-                Text("BatKill")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
                 Spacer()
                 badgeView
             }
