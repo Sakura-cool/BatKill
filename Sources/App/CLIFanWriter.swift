@@ -42,9 +42,9 @@ func handleCLIArgs() -> Bool {
             exit(1)
         }
         let monitor = HardwareMonitor()
-        monitor.setFanMode(fanIndex: fanIndex, auto: false)
-        _ = monitor.setFanSpeed(fanIndex: fanIndex, speed: speed)
-        exit(monitor.lastFanWriteOK ? 0 : 1)
+        let modeOK = monitor.setFanMode(fanIndex: fanIndex, auto: false)
+        let speedOK = monitor.setFanSpeed(fanIndex: fanIndex, speed: speed)
+        exit(modeOK && speedOK ? 0 : 1)
     }
 
     // --set-fan-mode <fanIndex> <0|1>
