@@ -421,7 +421,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .controlSize(.small)
+                .controlSize(.mini)
                 .font(.caption)
 
                 Spacer()

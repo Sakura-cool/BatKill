@@ -42,27 +42,29 @@ struct PopoverView: View {
     var body: some View {
         VStack(spacing: 12) {
             // ── Header ──
-            // Power icon, app title, and badge count
+            // App title + badge count (power icon moved to the status row)
             HStack {
-                Image(systemName: batteryMonitor.isOnBattery ? "battery.25" : "powerplug.fill")
-                    .font(.title3)
-                    .foregroundColor(batteryMonitor.isOnBattery ? .orange : .green)
-                    .accessibilityLabel(batteryMonitor.isOnBattery ? lm.translate("Battery", "电池") : lm.translate("AC Power", "交流电"))
                 Text("BatKill")
-                    .font(.headline)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
                 Spacer()
                 badgeView
             }
 
             // ── Power Status Bar ──
-            // Colored dot + battery percentage or "AC Power"
-            HStack {
+            // Colored dot + battery percentage or "AC Power", with the
+            // power-source icon trailing the text at a compact size
+            HStack(spacing: 6) {
                 Circle()
                     .fill(batteryMonitor.isOnBattery ? Color.orange : Color.green)
                     .frame(width: 8, height: 8)
                 Text(powerText)
                     .font(.caption)
                     .foregroundColor(.secondary)
+                Image(systemName: batteryMonitor.isOnBattery ? "battery.25" : "powerplug.fill")
+                    .font(.caption)
+                    .foregroundColor(batteryMonitor.isOnBattery ? .orange : .green)
+                    .accessibilityLabel(batteryMonitor.isOnBattery ? lm.translate("Battery", "电池") : lm.translate("AC Power", "交流电"))
                 Spacer()
             }
 
