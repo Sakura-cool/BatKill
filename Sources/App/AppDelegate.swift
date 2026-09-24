@@ -68,6 +68,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Reference to the temperature/hardware-monitor window.
     private var temperatureWindow: NSWindow?
 
+    /// Title-bar version button, kept so it can be disabled while a manual
+    /// update check / install is in progress.
+    private weak var titleBarVersionButton: NSButton?
+
+    /// True during a manual update check or install; further title-bar
+    /// version clicks are ignored until the flow finishes.
+    private var isManualUpdateInFlight = false
+
     /// Combine subscriptions for power state, app list, and restore count.
     private var cancellables     = Set<AnyCancellable>()
 
@@ -193,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // 6. Subscribe to state changes for badge and power actions.
         observeStateChanges()
+        observeUpdaterState()
 
         // 7. If launched with --diagnose-fan, auto-open the Temperature window
         //    and start logging CPU usage so we can measure the impact of
@@ -251,11 +260,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// the version runs a manual update check: download+install if a newer
     /// version exists, otherwise an up-to-date alert.
     private func installTitleBarVersionAccessory(on window: NSWindow) {
+        // Hide the system-rendered title text; the accessory below renders
+        // "BatKill vX.X.X" next to the traffic-light buttons instead.
         window.titleVisibility = .hidden
 
         let nameLabel = NSTextField(labelWithString: "BatKill")
         nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         nameLabel.textColor = .labelColor
+        nameLabel.sizeToFit()
 
         let versionButton = NSButton(title: "v\(versionChecker.currentVersion)",
                                      target: self,
@@ -265,24 +277,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         versionButton.contentTintColor = .secondaryLabelColor
         versionButton.toolTip = localizationManager.translate(
             "Check for updates", "点击检查更新")
-        versionButton.setButtonType(.momentaryChange)
-        versionButton.isContinuous = false
+        versionButton.sizeToFit()
+        titleBarVersionButton = versionButton
 
-        let stack = NSStackView(views: [nameLabel, versionButton])
-        stack.orientation = .horizontal
-        stack.spacing = 4
+        // Height matches the standard title bar (~28pt) so the content
+        // vertically centers against the traffic-light buttons.
+        let leadingInset: CGFloat = 6
+        let containerH: CGFloat = 28
+        let container = NSView(
+            frame: NSRect(x: 0, y: 0,
+                          width: leadingInset + nameLabel.frame.width + 8 + versionButton.frame.width,
+                          height: containerH))
+        nameLabel.frame.origin = NSPoint(x: leadingInset,
+                                         y: (containerH - nameLabel.frame.height) / 2)
+        versionButton.frame.origin = NSPoint(x: nameLabel.frame.maxX + 8,
+                                             y: (containerH - versionButton.frame.height) / 2)
+        container.addSubview(nameLabel)
+        container.addSubview(versionButton)
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.layoutAttribute = .leading
-        accessory.view = stack
+        accessory.view = container
         window.addTitlebarAccessoryViewController(accessory)
     }
 
     /// Manual update check triggered by tapping the title-bar version label.
-    /// Reuses the existing download/install pipeline (Updater) and shows an
-    /// up-to-date alert when no newer release exists.
+    /// The check result, download, and install run as one locked flow:
+    /// further clicks are ignored until the alert is dismissed or the
+    /// download/install finishes (the app relaunches on success).
     @objc private func titleBarVersionClicked() {
+        guard !isManualUpdateInFlight else {
+            logger("Manual update check skipped: flow already in progress")
+            return
+        }
+        isManualUpdateInFlight = true
+        titleBarVersionButton?.isEnabled = false
         logger("Manual update check triggered from title bar")
+
         versionChecker.checkForUpdate { [weak self] result in
             guard let self else { return }
             switch result {
@@ -292,26 +323,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             case .upToDate:
                 let msg = self.localizationManager.translate(
                     "You're up to date!", "已是最新版本")
-                self.showUpdateAlert(msg)
+                self.showUpdateAlert(msg) {
+                    self.finishManualUpdateFlow()
+                }
             case .failed:
                 let msg = self.localizationManager.translate(
                     "Update check failed. Check your network and try again.",
                     "更新检查失败，请检查网络后重试。")
-                self.showUpdateAlert(msg)
+                self.showUpdateAlert(msg) {
+                    self.finishManualUpdateFlow()
+                }
             }
         }
     }
 
+    /// Unlocks the title-bar version button after the manual update flow
+    /// reaches a terminal state (alert dismissed or download finished).
+    /// Success relaunches the app, so this normally only runs on failure.
+    private func finishManualUpdateFlow() {
+        isManualUpdateInFlight = false
+        titleBarVersionButton?.isEnabled = true
+    }
+
+    /// Observes the updater: once a manual download ends (success relaunches,
+    /// failure or install error returns here), release the update lock.
+    private func observeUpdaterState() {
+        updater.$isDownloading
+            .receive(on: DispatchQueue.main)
+            .dropFirst()
+            .sink { [weak self] downloading in
+                guard let self, !downloading, self.isManualUpdateInFlight else { return }
+                logger("Manual update download finished; releasing update lock")
+                self.finishManualUpdateFlow()
+            }
+            .store(in: &cancellables)
+    }
+
     /// Shows a simple modal information alert (used for up-to-date / failure).
-    private func showUpdateAlert(_ message: String) {
+    /// - Parameter completion: Called after the alert is dismissed.
+    private func showUpdateAlert(_ message: String, completion: (() -> Void)? = nil) {
         let alert = NSAlert()
         alert.messageText = message
         alert.alertStyle = .informational
         alert.addButton(withTitle: localizationManager.translate("OK", "知道了"))
         if let win = settingsWindow {
-            alert.beginSheetModal(for: win) { _ in }
+            alert.beginSheetModal(for: win) { _ in
+                completion?()
+            }
         } else {
             alert.runModal()
+            completion?()
         }
     }
 
