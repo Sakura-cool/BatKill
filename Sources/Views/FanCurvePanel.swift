@@ -197,9 +197,7 @@ struct FanCurvePanel: View {
                             bounds: (minY: Double, maxY: Double)) -> some View {
         let curve = currentCurve
         let temp = FanCurve.temperature(atStep: step, threshold: curve.threshold)
-        let speed = curve.stepSpeeds[step] ?? 0
         let x = xFor(temp: temp, plot: plot, curve: curve)
-        let y = yFor(speed: speed, plot: plot, bounds: bounds)
         return VStack(spacing: 1) {
             HStack(spacing: 3) {
                 Text("\(Int(temp))°C")
