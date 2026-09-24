@@ -234,15 +234,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let hostingController = NSHostingController(rootView: contentView)
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "BatKill \(versionChecker.currentVersion)"
+        window.title = "BatKill"
         window.styleMask = NSWindow.StyleMask([.titled, .closable, .miniaturizable, .resizable])
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.setContentSize(NSSize(width: 500, height: 640))
         window.center()
+        installTitleBarVersionAccessory(on: window)
         window.makeKeyAndOrderFront(nil as NSWindow?)
         settingsWindow = window
         activateApp()
+    }
+
+    /// Adds a title-bar accessory next to the window-traffic-light buttons
+    /// showing "BatKill" plus a tappable version label ("v0.1.6"). Clicking
+    /// the version runs a manual update check: download+install if a newer
+    /// version exists, otherwise an up-to-date alert.
+    private func installTitleBarVersionAccessory(on window: NSWindow) {
+        window.titleVisibility = .hidden
+
+        let nameLabel = NSTextField(labelWithString: "BatKill")
+        nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        nameLabel.textColor = .labelColor
+
+        let versionButton = NSButton(title: "v\(versionChecker.currentVersion)",
+                                     target: self,
+                                     action: #selector(titleBarVersionClicked))
+        versionButton.isBordered = false
+        versionButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        versionButton.contentTintColor = .secondaryLabelColor
+        versionButton.toolTip = localizationManager.translate(
+            "Check for updates", "点击检查更新")
+        versionButton.setButtonType(.momentaryChange)
+        versionButton.isContinuous = false
+
+        let stack = NSStackView(views: [nameLabel, versionButton])
+        stack.orientation = .horizontal
+        stack.spacing = 4
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.layoutAttribute = .leading
+        accessory.view = stack
+        window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    /// Manual update check triggered by tapping the title-bar version label.
+    /// Reuses the existing download/install pipeline (Updater) and shows an
+    /// up-to-date alert when no newer release exists.
+    @objc private func titleBarVersionClicked() {
+        logger("Manual update check triggered from title bar")
+        versionChecker.checkForUpdate { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .hasUpdate:
+                logger("Manual check: update available, starting download")
+                self.updater.downloadAndInstall()
+            case .upToDate:
+                let msg = self.localizationManager.translate(
+                    "You're up to date!", "已是最新版本")
+                self.showUpdateAlert(msg)
+            case .failed:
+                let msg = self.localizationManager.translate(
+                    "Update check failed. Check your network and try again.",
+                    "更新检查失败，请检查网络后重试。")
+                self.showUpdateAlert(msg)
+            }
+        }
+    }
+
+    /// Shows a simple modal information alert (used for up-to-date / failure).
+    private func showUpdateAlert(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: localizationManager.translate("OK", "知道了"))
+        if let win = settingsWindow {
+            alert.beginSheetModal(for: win) { _ in }
+        } else {
+            alert.runModal()
+        }
     }
 
     /// Opens (or focuses) the Temperature / Hardware Monitor window.

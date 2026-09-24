@@ -74,32 +74,56 @@ final class VersionChecker: ObservableObject {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
     }
 
+    /// Result of a manual update check.
+    enum CheckResult {
+        /// A newer version is available (`latestVersion` is now set).
+        case hasUpdate
+        /// The installed version is already the latest.
+        case upToDate
+        /// The check failed (network / parse error).
+        case failed
+    }
+
     /// Fetches the latest release from GitHub and compares version numbers.
     /// Updates `latestVersion` and `hasUpdate` on the main thread.
-    func checkForUpdate() {
+    /// - Parameter completion: Called on the main thread with the check result.
+    ///   Omit to keep the existing fire-and-forget behavior.
+    func checkForUpdate(completion: ((CheckResult) -> Void)? = nil) {
         isLoading = true
-        guard let url = URL(string: repoAPIURL) else { return }
+        guard let url = URL(string: repoAPIURL) else {
+            DispatchQueue.main.async {
+                self.isLoading = false
+                completion?(.failed)
+            }
+            return
+        }
 
         var request = URLRequest(url: url)
         request.setValue("BatKill-Updater", forHTTPHeaderField: "User-Agent")
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self else { return }
             DispatchQueue.main.async {
-                self?.isLoading = false
+                self.isLoading = false
             }
             guard let data = data,
                   let release = try? JSONDecoder().decode(GitHubRelease.self, from: data) else {
                 logger("Updater: failed to parse release info")
+                DispatchQueue.main.async {
+                    completion?(.failed)
+                }
                 return
             }
 
             // Strip "v" prefix for numeric comparison
             let remote = release.tagName.replacingOccurrences(of: "v", with: "")
-            logger("Updater: current=\(self?.currentVersion ?? "?"), remote=\(remote)")
+            logger("Updater: current=\(self.currentVersion), remote=\(remote)")
 
             DispatchQueue.main.async {
-                self?.latestVersion = remote
-                self?.hasUpdate = self?.isNewer(remote: remote) ?? false
+                self.latestVersion = remote
+                let newer = self.isNewer(remote: remote)
+                self.hasUpdate = newer
+                completion?(newer ? .hasUpdate : .upToDate)
             }
         }.resume()
     }
