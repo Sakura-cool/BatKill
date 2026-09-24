@@ -730,24 +730,25 @@ struct TemperatureView: View {
                 .frame(width: 120)
             }
 
-            // Manual sub-mode picker: fixed speed vs temperature curve.
-            // Only shown while the fan is in manual mode and not throttled.
+            // Manual sub-mode: clickable label toggling 定速 ⇄ 调速.
+            // Shown only while the fan is in manual mode and not throttled.
             if isManual && !hardwareMonitor.thermalThrottled {
-                HStack {
-                    Text(lm.translate("Mode", "模式"))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Picker("", selection: Binding(
-                        get: { curveStore.subMode(for: fan.index) },
-                        set: { curveStore.setSubMode($0, for: fan.index) }
-                    )) {
-                        Text(lm.translate("Fixed", "定速")).tag(ManualSubMode.fixed)
-                        Text(lm.translate("Curve", "调速")).tag(ManualSubMode.curve)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 140)
-                    Spacer()
+                let isCurve = curveStore.subMode(for: fan.index) == .curve
+                Button {
+                    curveStore.setSubMode(isCurve ? .fixed : .curve, for: fan.index)
+                } label: {
+                    Label(
+                        isCurve ? lm.translate("调速", "调速") : lm.translate("定速", "定速"),
+                        systemImage: isCurve ? "chart.xyaxis.line" : "fan.fill"
+                    )
+                    .font(.caption2)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help(lm.translate(
+                    "Toggle fixed speed / temperature curve",
+                    "切换 定速 / 调速"
+                ))
             }
 
             // Manual mode controls (hidden when auto or thermally throttled)
@@ -815,7 +816,7 @@ struct TemperatureView: View {
         guard !hardwareMonitor.thermalThrottled else { return }
         let temp = hardwareMonitor.maxCPUTemp
         guard curveStore.subMode(for: fan.index) == .curve else { return }
-        let curve = curveStore.curve(for: fan.index, currentSpeed: fan.currentSpeed)
+        let curve = curveStore.curve(for: fan.index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
 
         switch curve.targetSpeed(for: temp) {
         case .speed(let target):
@@ -957,8 +958,10 @@ struct TemperatureView: View {
             } else {
                 hardwareMonitor.partialRefreshCPUAndGPU(threshold: thresholdStore.threshold)
             }
-            // v0.2.0: drive temperature-curve fans after each refresh.
-            // Runs only with admin authorization so the curve can write speeds.
+            // v0.2.0: keep the curve panel's temperature marker fresh, then
+            // drive temperature-curve fans after each refresh (only with
+            // admin authorization so the curve can write speeds).
+            curveStore?.lastReadCPUTemp = hardwareMonitor.maxCPUTemp
             if let curveStore, hardwareMonitor.isAdminAuthorized {
                 for fan in hardwareMonitor.fans where curveStore.subMode(for: fan.index) == .curve {
                     Self.driveCurveFan(fan, hardwareMonitor: hardwareMonitor, curveStore: curveStore)

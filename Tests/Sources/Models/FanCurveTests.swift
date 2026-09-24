@@ -173,7 +173,7 @@ final class FanCurveTests: TestCase {
 
             let reloaded = FanCurveStore()
             XCTAssertEqual(reloaded.subMode(for: 0), .curve)
-            XCTAssertEqual(Int(reloaded.curve(for: 0, currentSpeed: 700).stepSpeeds[1] ?? -1), 1200)
+            XCTAssertEqual(Int(reloaded.curve(for: 0, minSpeed: 0, maxSpeed: 2000).stepSpeeds[1] ?? -1), 1200)
         }
     }
 
@@ -181,6 +181,35 @@ final class FanCurveTests: TestCase {
         runTest("FanCurveStore subMode falls back to fixed") {
             let store = FanCurveStore()
             XCTAssertEqual(store.subMode(for: 3), .fixed)
+        }
+    }
+
+    // MARK: - System Default Curve & Smoothing
+
+    func testSystemDefaultRamp() {
+        runTest("systemDefault ramps min → max across steps") {
+            let curve = FanCurve.systemDefault(threshold: 100, minSpeed: 500, maxSpeed: 2500)
+            XCTAssertEqual(Int(curve.stepSpeeds[0] ?? -1), 500)
+            XCTAssertEqual(Int(curve.stepSpeeds[10] ?? -1), 2500, "last step = maxSpeed")
+            XCTAssertTrue(curve.isMonotonic)
+        }
+    }
+
+    func testDefaultCurveOnDemand() {
+        runTest("curve(for:) creates system default on first access") {
+            let store = FanCurveStore()
+            let curve = store.curve(for: 0, minSpeed: 600, maxSpeed: 3000)
+            XCTAssertEqual(Int(curve.stepSpeeds[0] ?? -1), 600)
+            XCTAssertEqual(Int(curve.stepSpeeds[FanCurve.maxStepIndex(for: curve.threshold)] ?? -1), 3000)
+        }
+    }
+
+    func testSmoothedForcesMonotonic() {
+        runTest("smoothed restores monotonicity for inverted steps") {
+            var curve = FanCurve(threshold: 60, baseSpeed: 500)
+            curve.stepSpeeds = [0: 1000, 1: 800, 2: 1200, 3: 1100, 4: 1400, 5: 2000, 6: 2200]
+            let smoothed = curve.smoothed()
+            XCTAssertTrue(smoothed.isMonotonic)
         }
     }
 }

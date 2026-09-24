@@ -66,6 +66,40 @@ struct FanCurve: Codable, Equatable {
         }
     }
 
+    /// System default curve: a linear ramp from `minSpeed` at 0 °C up to
+    /// `maxSpeed` at the threshold. Used when the user has not customized
+    /// the curve (default after switching to 调速).
+    static func systemDefault(threshold: Double, minSpeed: Double, maxSpeed: Double) -> FanCurve {
+        var curve = FanCurve(threshold: threshold, baseSpeed: minSpeed)
+        let maxStep = maxStepIndex(for: threshold)
+        let range = max(maxSpeed - minSpeed, 1)
+        for k in 0...maxStep {
+            let ratio = Double(k) / Double(maxStep)
+            curve.stepSpeeds[k] = minSpeed + range * ratio
+        }
+        return curve
+    }
+
+    /// Smoothed copy for the curve editor: forces monotonicity (clamped)
+    /// then evens out local spikes by capping each step to the max of its
+    /// neighbors' averages. Prevents "high temp low speed / low temp high
+    /// speed" mistakes while keeping the user's overall intent.
+    func smoothed() -> FanCurve {
+        // 1) Monotonic clamp first (safety net).
+        let clamped = clamped()
+
+        // 2) Forward running maximum keeps monotonicity after smoothing.
+        var out = clamped
+        var runningMax = -Double.greatestFiniteMagnitude
+        let keys = clamped.stepSpeeds.keys.sorted()
+        for k in keys {
+            guard let speed = clamped.stepSpeeds[k] else { continue }
+            if speed > runningMax { runningMax = speed }
+            out.stepSpeeds[k] = runningMax
+        }
+        return out
+    }
+
     /// Reads the persisted threshold (same value `TemperatureThresholdStore`
     /// uses); falls back to `defaultThreshold` when unset/invalid.
     static func persistedThreshold() -> Double {
@@ -157,6 +191,9 @@ final class FanCurveStore: ObservableObject {
     /// Fan curve per fan index.
     @Published var curves: [Int: FanCurve] = [:]
 
+    /// Latest CPU temperature read, used by the curve panel's marker.
+    @Published var lastReadCPUTemp: Double = 0
+
     /// Last successfully written curve target speed per fan (runtime only,
     /// used to skip redundant writes while driving the curve).
     private var lastWrittenSpeeds: [Int: Double] = [:]
@@ -204,10 +241,13 @@ final class FanCurveStore: ObservableObject {
         subModes[index] ?? Self.defaultSubMode
     }
 
-    /// Curve for a fan, creating a default on demand (current-speed seeded).
-    func curve(for index: Int, currentSpeed: Double) -> FanCurve {
+    /// Curve for a fan, creating the system default on demand (linear ramp
+    /// from `minSpeed` to `maxSpeed` across the temperature range).
+    func curve(for index: Int, minSpeed: Double, maxSpeed: Double) -> FanCurve {
         if let curve = curves[index] { return curve }
-        let curve = FanCurve(threshold: FanCurve.persistedThreshold(), baseSpeed: currentSpeed)
+        let curve = FanCurve.systemDefault(threshold: FanCurve.persistedThreshold(),
+                                           minSpeed: minSpeed,
+                                           maxSpeed: maxSpeed)
         curves[index] = curve
         save()
         return curve
