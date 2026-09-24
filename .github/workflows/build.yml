@@ -1,0 +1,56 @@
+name: Build & Release BatKill
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Inject version from tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $TAG" Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" Resources/Info.plist
+          echo "Injected: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist) ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Resources/Info.plist))"
+
+      - name: Build both architectures with DMG
+        run: |
+          set -euo pipefail
+          bash build.sh --dmg
+          echo "── 产物清单 ──"
+          ls -la .package/*/
+
+      - name: Create draft release and upload assets
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: BatKill ${{ github.ref_name }}
+          body: |
+            BatKill macOS 菜单栏工具 v${{ github.ref_name }}
+
+            - macOS arm64（Apple Silicon）
+            - macOS x86_64（Intel）
+
+            资产：`.dmg` 安装包 + `.app.zip` 免安装版
+          draft: true
+          files: |
+            .package/arm64/BatKill-arm64.dmg
+            .package/arm64/BatKill-arm64.app.zip
+            .package/x86_64/BatKill-x86_64.dmg
+            .package/x86_64/BatKill-x86_64.app.zip
