@@ -261,7 +261,7 @@ final class FanCurveStore: ObservableObject {
 
     /// Updates a fan's curve, applying the monotonic clamp as a safety net.
     func setCurve(_ curve: FanCurve, for index: Int) {
-        curves[index] = curve.clamped()
+        curves[index] = curve   // raw per-step values, no monotonic clamp
         save()
     }
 
