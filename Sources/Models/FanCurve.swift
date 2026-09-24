@@ -285,4 +285,37 @@ final class FanCurveStore: ObservableObject {
     func setSystemControlActive(_ active: Bool, for index: Int) {
         systemControlFlags[index] = active
     }
+
+    /// Drives one curve-mode fan for the current CPU temperature: writes the
+    /// interpolated target speed on change, and hands control back to the
+    /// system exactly once when the temperature exceeds the curve threshold.
+    /// Called by the TemperatureView refresh timer each tick.
+    func driveFan(fan: FanInfo, hardwareMonitor: HardwareMonitor) {
+        guard !hardwareMonitor.thermalThrottled else { return }
+        let temp = hardwareMonitor.maxCPUTemp
+        guard subMode(for: fan.index) == .curve else { return }
+        let curve = curve(for: fan.index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
+
+        switch curve.targetSpeed(for: temp) {
+        case .speed(let target):
+            // Recovered back under threshold — re-enable manual control.
+            if isSystemControlActive(for: fan.index) {
+                hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { _ in
+                    self.setSystemControlActive(false, for: fan.index)
+                }
+            }
+            // Skip redundant writes.
+            if lastWrittenSpeed(for: fan.index) != target {
+                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
+                    if ok { self.recordWrittenSpeed(target, for: fan.index) }
+                }
+            }
+        case .systemControl:
+            // Hand over to system exactly once per over-threshold event.
+            guard !isSystemControlActive(for: fan.index) else { return }
+            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { _ in
+                self.setSystemControlActive(true, for: fan.index)
+            }
+        }
+    }
 }

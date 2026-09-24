@@ -695,17 +695,30 @@ struct TemperatureView: View {
 
                 Spacer()
 
-                // Auto / Manual segmented picker
+                // Mode segmented picker: 自动 | 定速 | 调速.
+                // The two manual sub-modes live inside the "manual" control:
+                // tapping 手动-class options switches between fixed speed and
+                // temperature curve (验收反馈 v3: merged into the manual key).
                 Picker("", selection: Binding(
-                    get: { isManual },
+                    get: {
+                        // 0 = auto, 1 = fixed manual, 2 = curve manual
+                        if !isManual { return 0 }
+                        return curveStore.subMode(for: fan.index) == .curve ? 2 : 1
+                    },
                     set: { newValue in
+                        let wantsManual = newValue != 0
                         // Block manual mode if thermally throttled
-                        if newValue && hardwareMonitor.thermalThrottled { return }
-                        fanManualModes[fan.index] = newValue
+                        if wantsManual && hardwareMonitor.thermalThrottled { return }
+                        fanManualModes[fan.index] = wantsManual
+                        if newValue == 2 {
+                            curveStore.setSubMode(.curve, for: fan.index)
+                        } else {
+                            curveStore.setSubMode(.fixed, for: fan.index)
+                        }
                         fanWriteStatus[fan.index] = nil
                         fanNeedsAdmin[fan.index] = nil
 
-                        if newValue {
+                        if wantsManual {
                             // Switching to manual: initialize pending speed
                             fanPendingSpeeds[fan.index] = fan.currentSpeed
                             hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
@@ -723,38 +736,33 @@ struct TemperatureView: View {
                         }
                     }
                 )) {
-                    Text(lm.translate("Auto", "自动")).tag(false)
-                    Text(lm.translate("Manual", "手动")).tag(true)
+                    Text(lm.translate("Auto", "自动")).tag(0)
+                    Text(lm.translate("Fixed", "定速")).tag(1)
+                    Text(lm.translate("Curve", "调速")).tag(2)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 120)
-            }
-
-            // Manual sub-mode: clickable label toggling 定速 ⇄ 调速.
-            // Shown only while the fan is in manual mode and not throttled.
-            if isManual && !hardwareMonitor.thermalThrottled {
-                let isCurve = curveStore.subMode(for: fan.index) == .curve
-                Button {
-                    curveStore.setSubMode(isCurve ? .fixed : .curve, for: fan.index)
-                } label: {
-                    Label(
-                        isCurve ? lm.translate("调速", "调速") : lm.translate("定速", "定速"),
-                        systemImage: isCurve ? "chart.xyaxis.line" : "fan.fill"
-                    )
-                    .font(.caption2)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .help(lm.translate(
-                    "Toggle fixed speed / temperature curve",
-                    "切换 定速 / 调速"
-                ))
+                .frame(width: 180)
             }
 
             // Manual mode controls (hidden when auto or thermally throttled)
             if isManual && !hardwareMonitor.thermalThrottled {
                 if curveStore.subMode(for: fan.index) == .curve {
-                    FanCurvePanel(fan: fan, curveStore: curveStore, lm: lm)
+                    FanCurvePanel(
+                        fan: fan,
+                        curveStore: curveStore,
+                        lm: lm,
+                        onApplySpeed: { target in
+                            if hardwareMonitor.isAdminAuthorized {
+                                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
+                                    fanWriteStatus[fan.index] = ok
+                                        ? lm.translate("Set (Admin)", "已设定(管理员)")
+                                        : lm.translate("Failed", "失败")
+                                }
+                            } else {
+                                fanNeedsAdmin[fan.index] = true
+                            }
+                        }
+                    )
                 } else {
                 FanFixedSpeedControls(
                     fan: fan,
@@ -813,32 +821,7 @@ struct TemperatureView: View {
     private static func driveCurveFan(_ fan: FanInfo,
                                       hardwareMonitor: HardwareMonitor,
                                       curveStore: FanCurveStore) {
-        guard !hardwareMonitor.thermalThrottled else { return }
-        let temp = hardwareMonitor.maxCPUTemp
-        guard curveStore.subMode(for: fan.index) == .curve else { return }
-        let curve = curveStore.curve(for: fan.index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
-
-        switch curve.targetSpeed(for: temp) {
-        case .speed(let target):
-            // Recovered back under threshold — re-enable manual control.
-            if curveStore.isSystemControlActive(for: fan.index) {
-                hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { _ in
-                    curveStore.setSystemControlActive(false, for: fan.index)
-                }
-            }
-            // Skip redundant writes.
-            if curveStore.lastWrittenSpeed(for: fan.index) != target {
-                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
-                    if ok { curveStore.recordWrittenSpeed(target, for: fan.index) }
-                }
-            }
-        case .systemControl:
-            // Hand over to system exactly once per over-threshold event.
-            guard !curveStore.isSystemControlActive(for: fan.index) else { return }
-            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { _ in
-                curveStore.setSystemControlActive(true, for: fan.index)
-            }
-        }
+        curveStore.driveFan(fan: fan, hardwareMonitor: hardwareMonitor)
     }
 
     /// Initializes fan UI state (manual modes and pending speeds) from
