@@ -388,10 +388,11 @@ final class MenuBarManager: NSObject, ObservableObject {
 
             self.notificationWindow?.close()
 
+            let isDark = NSApp.effectiveAppearance.name == .darkAqua
             let label = NSTextField(labelWithString: message)
             label.font = .systemFont(ofSize: 12, weight: .medium)
-            label.textColor = .white
-            label.backgroundColor = NSColor(white: 0.15, alpha: 0.92)
+            label.textColor = isDark ? .white : NSColor(white: 0.13, alpha: 1)
+            label.backgroundColor = .clear
             label.isBezeled = false
             label.isEditable = false
             label.alignment = .center
@@ -414,7 +415,6 @@ final class MenuBarManager: NSObject, ObservableObject {
             panel.contentView = NSView(frame: NSRect(origin: .zero, size: contentSize))
             panel.contentView?.wantsLayer = true
             panel.contentView?.layer?.cornerRadius = 6
-            let isDark = NSApp.effectiveAppearance.name == .darkAqua
             panel.contentView?.layer?.backgroundColor = (isDark ? NSColor(white: 0.15, alpha: 0.92) : NSColor(white: 0.95, alpha: 0.92)).cgColor
             panel.contentView?.addSubview(label)
             panel.contentView?.frame = NSRect(origin: .zero, size: contentSize)
