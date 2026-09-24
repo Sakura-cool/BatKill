@@ -414,7 +414,8 @@ struct SettingsView: View {
 
             // Bottom row: language + auto-start + update
             HStack(spacing: 8) {
-                // Language segmented picker (compact, matches Auto-start size)
+                // Language segmented picker (same height as the Auto-start
+                // label below: mini size trimmed ~1/5 to match it visually)
                 Picker("", selection: $lm.currentLanguage) {
                     ForEach(Language.allCases, id: \.self) { lang in
                         Text(lang.displayName).tag(lang)
@@ -423,6 +424,7 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 .controlSize(.mini)
                 .font(.caption)
+                .frame(height: 15)
 
                 Spacer()
 
@@ -433,6 +435,7 @@ struct SettingsView: View {
                 }
                 .toggleStyle(.checkbox)
                 .controlSize(.small)
+                .frame(height: 15)
                 .help(lm.translate(
                     "Launch BatKill automatically when you log in",
                     "登录时自动启动 BatKill"
