@@ -751,17 +751,10 @@ struct TemperatureView: View {
                         fan: fan,
                         curveStore: curveStore,
                         lm: lm,
-                        onApplySpeed: { target in
-                            if hardwareMonitor.isAdminAuthorized {
-                                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
-                                    fanWriteStatus[fan.index] = ok
-                                        ? lm.translate("Set (Admin)", "已设定(管理员)")
-                                        : lm.translate("Failed", "失败")
-                                }
-                            } else {
-                                fanNeedsAdmin[fan.index] = true
-                            }
-                        }
+                        onApplySpeed: { _ in self.applyCurveSpeed(for: fan) },
+                        statusMessage: fanWriteStatus[fan.index],
+                        needsAdmin: fanNeedsAdmin[fan.index] == true,
+                        onAuthorize: { self.authorizeCurveFan(for: fan) }
                     )
                 } else {
                 FanFixedSpeedControls(
@@ -818,10 +811,32 @@ struct TemperatureView: View {
     ///
     /// Static because it runs from the refresh timer's escaping closure
     /// (which captures stores weakly, not the SwiftUI view instance).
-    private static func driveCurveFan(_ fan: FanInfo,
-                                      hardwareMonitor: HardwareMonitor,
-                                      curveStore: FanCurveStore) {
-        curveStore.driveFan(fan: fan, hardwareMonitor: hardwareMonitor)
+    /// Curve-mode "生效": write the target speed, or surface the admin button.
+    private func applyCurveSpeed(for fan: FanInfo) {
+        if hardwareMonitor.isAdminAuthorized {
+            let target = curveStore.targetSpeed(for: fan.index,
+                                                fan: fan,
+                                                maxTemp: hardwareMonitor.maxCPUTemp)
+            hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
+                fanWriteStatus[fan.index] = ok
+                    ? lm.translate("Set (Admin)", "已设定(管理员)")
+                    : lm.translate("Failed", "失败")
+            }
+        } else {
+            fanNeedsAdmin[fan.index] = true
+        }
+    }
+
+    /// Curve-mode admin authorization flow (explicit user action).
+    private func authorizeCurveFan(for fan: FanInfo) {
+        HardwareMonitor.resetAuthDenied()
+        if hardwareMonitor.requestAdminAuth() {
+            bringAppToFront()
+            fanNeedsAdmin[fan.index] = nil
+            applyCurveSpeed(for: fan)
+        } else {
+            fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
+        }
     }
 
     /// Initializes fan UI state (manual modes and pending speeds) from
@@ -947,7 +962,7 @@ struct TemperatureView: View {
             curveStore?.lastReadCPUTemp = hardwareMonitor.maxCPUTemp
             if let curveStore, hardwareMonitor.isAdminAuthorized {
                 for fan in hardwareMonitor.fans where curveStore.subMode(for: fan.index) == .curve {
-                    Self.driveCurveFan(fan, hardwareMonitor: hardwareMonitor, curveStore: curveStore)
+                    curveStore.driveFan(fan: fan, hardwareMonitor: hardwareMonitor)
                 }
             }
         }

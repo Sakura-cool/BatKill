@@ -20,6 +20,12 @@ struct FanCurvePanel: View {
     /// Called when the user taps "生效" with the target speed for the
     /// current CPU temperature. The parent performs the admin write.
     var onApplySpeed: ((Double) -> Void)?
+    /// Status message after a write attempt (same slot as fixed-speed).
+    var statusMessage: String?
+    /// Whether an admin authorization button should be shown.
+    var needsAdmin: Bool = false
+    /// Called when the user taps "授权管理员".
+    var onAuthorize: () -> Void = {}
 
     /// Step index being edited in place on the chart; nil = none.
     @State private var editingStep: Int?
@@ -111,8 +117,9 @@ struct FanCurvePanel: View {
             }
             .frame(height: 150)
 
-            // Bottom legend: Y-axis unit + current-temp target + apply
-            HStack {
+            // Action row: Apply (like fixed-speed 设定转速) + authorize +
+            // status message — mirrors FanFixedSpeedControls interaction.
+            HStack(spacing: 8) {
                 Text(lm.translate("Y: ×100 RPM", "Y 轴: ×100 转/分"))
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -132,6 +139,24 @@ struct FanCurvePanel: View {
                 .tint(.blue)
                 .help(lm.translate("Write current curve speed to the fan",
                                    "将当前温度对应的目标转速写入风扇"))
+
+                // Admin authorization button (shown after first failed attempt)
+                if needsAdmin {
+                    Button(action: onAuthorize) {
+                        Label(lm.translate("Authorize Admin", "授权管理员"),
+                              systemImage: "lock.shield")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(.orange)
+                }
+
+                // Status message after write attempt
+                if let status = statusMessage {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundColor(needsAdmin ? .red : .green)
+                }
             }
         }
     }

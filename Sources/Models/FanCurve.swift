@@ -286,6 +286,16 @@ final class FanCurveStore: ObservableObject {
         systemControlFlags[index] = active
     }
 
+    /// Curve target speed for a fan at a given CPU temperature.
+    /// Falls back to the fan's current speed when above the threshold.
+    func targetSpeed(for index: Int, fan: FanInfo, maxTemp: Double) -> Double {
+        let curve = curve(for: index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
+        if case .speed(let v) = curve.targetSpeed(for: maxTemp) {
+            return v
+        }
+        return fan.currentSpeed
+    }
+
     /// Drives one curve-mode fan for the current CPU temperature: writes the
     /// interpolated target speed on change, and hands control back to the
     /// system exactly once when the temperature exceeds the curve threshold.
