@@ -41,16 +41,9 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            // ── Header ──
-            // Badge count only, right-aligned (app name is not shown here)
-            HStack {
-                Spacer()
-                badgeView
-            }
-
             // ── Power Status Bar ──
             // Colored dot + battery percentage or "AC Power", with the
-            // power-source icon trailing the text at a compact size
+            // power-source icon trailing the text and the badge on the right
             HStack(spacing: 6) {
                 Circle()
                     .fill(batteryMonitor.isOnBattery ? Color.orange : Color.green)
@@ -63,6 +56,7 @@ struct PopoverView: View {
                     .foregroundColor(batteryMonitor.isOnBattery ? .orange : .green)
                     .accessibilityLabel(batteryMonitor.isOnBattery ? lm.translate("Battery", "电池") : lm.translate("AC Power", "交流电"))
                 Spacer()
+                badgeView
             }
 
             Divider()
