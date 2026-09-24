@@ -46,6 +46,10 @@ struct TemperatureView: View {
     /// Persistent store for the temperature threshold setting.
     @StateObject private var thresholdStore = TemperatureThresholdStore()
 
+    /// Persistent store for per-fan manual sub-modes (fixed/curve) and
+    /// temperature-adaptive fan curves (v0.2.0).
+    @StateObject private var curveStore = FanCurveStore()
+
     // MARK: - Local UI State
 
     /// Per-fan manual mode flags: true = manual, false = auto.
@@ -676,7 +680,6 @@ struct TemperatureView: View {
     /// set button, and admin authorization flow.
     private func fanControlRow(_ fan: FanInfo) -> some View {
         let isManual = fanManualModes[fan.index] ?? false
-        let pendingSpeed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -727,108 +730,115 @@ struct TemperatureView: View {
                 .frame(width: 120)
             }
 
+            // Manual sub-mode picker: fixed speed vs temperature curve.
+            // Only shown while the fan is in manual mode and not throttled.
+            if isManual && !hardwareMonitor.thermalThrottled {
+                HStack {
+                    Text(lm.translate("Mode", "模式"))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Picker("", selection: Binding(
+                        get: { curveStore.subMode(for: fan.index) },
+                        set: { curveStore.setSubMode($0, for: fan.index) }
+                    )) {
+                        Text(lm.translate("Fixed", "定速")).tag(ManualSubMode.fixed)
+                        Text(lm.translate("Curve", "调速")).tag(ManualSubMode.curve)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 140)
+                    Spacer()
+                }
+            }
+
             // Manual mode controls (hidden when auto or thermally throttled)
             if isManual && !hardwareMonitor.thermalThrottled {
-                // Speed slider with +/- buttons
-                HStack(spacing: 8) {
-                    Image(systemName: "minus")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-
-                    Slider(
-                        value: Binding(
-                            get: { pendingSpeed },
-                            set: { fanPendingSpeeds[fan.index] = $0 }
-                        ),
-                        in: 0...fan.maxSpeed,
-                        step: 100
-                    )
-
-                    Image(systemName: "plus")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-
-                    // Numeric readout of pending speed
-                    Text(String(format: "%d", Int(pendingSpeed)))
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(width: 50, alignment: .trailing)
-                }
-
-                // Min/Max speed labels
-                HStack {
-                    Text(lm.translate("Min: %d", "最小: %d", Int(fan.minSpeed)))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text(lm.translate("Max: %d", "最大: %d", Int(fan.maxSpeed)))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-
-                // Action buttons: Set Speed, Authorize Admin, status message
-                HStack(spacing: 8) {
-                    Button {
-                        let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
+                if curveStore.subMode(for: fan.index) == .curve {
+                    FanCurvePanel(fan: fan, curveStore: curveStore, lm: lm)
+                } else {
+                FanFixedSpeedControls(
+                    fan: fan,
+                    lm: lm,
+                    hardwareMonitor: hardwareMonitor,
+                    pendingSpeed: Binding(
+                        get: { fanPendingSpeeds[fan.index] ?? fan.currentSpeed },
+                        set: { fanPendingSpeeds[fan.index] = $0 }
+                    ),
+                    statusMessage: fanWriteStatus[fan.index],
+                    needsAdmin: fanNeedsAdmin[fan.index] == true,
+                    onSetSpeed: { speed in
                         if hardwareMonitor.isAdminAuthorized {
-                            // Already authorized -- write speed directly
                             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
                                 fanWriteStatus[fan.index] = ok
                                     ? lm.translate("Set (Admin)", "已设定(管理员)")
                                     : lm.translate("Failed", "失败")
                             }
                         } else {
-                            // Need admin -- show authorize button
                             fanNeedsAdmin[fan.index] = true
                         }
-                    } label: {
-                        Label(lm.translate("Set Speed", "设定转速"), systemImage: "checkmark.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(.blue)
-
-                    // Admin authorization button (shown after first failed attempt)
-                    if fanNeedsAdmin[fan.index] == true {
-                        Button {
-                            // This is an EXPLICIT user action — reset denied state
-                            // so the auth dialog actually appears.
-                            HardwareMonitor.resetAuthDenied()
-                            if hardwareMonitor.requestAdminAuth() {
-                                bringAppToFront()
-                                fanNeedsAdmin[fan.index] = nil
-                                let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
-                                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
-                                    fanWriteStatus[fan.index] = ok
-                                        ? lm.translate("Set (Admin)", "已设定(管理员)")
-                                        : lm.translate("Admin Failed", "管理员授权失败")
-                                }
-                            } else {
-                                fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
+                    },
+                    onAuthorize: {
+                        // Explicit user action — reset denied state so the
+                        // auth dialog actually appears.
+                        HardwareMonitor.resetAuthDenied()
+                        if hardwareMonitor.requestAdminAuth() {
+                            bringAppToFront()
+                            fanNeedsAdmin[fan.index] = nil
+                            let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
+                            hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: speed) { ok in
+                                fanWriteStatus[fan.index] = ok
+                                    ? lm.translate("Set (Admin)", "已设定(管理员)")
+                                    : lm.translate("Admin Failed", "管理员授权失败")
                             }
-                        } label: {
-                            Label(lm.translate("Authorize Admin", "授权管理员"), systemImage: "lock.shield")
+                        } else {
+                            fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .tint(.orange)
                     }
-
-                    // Status message after write attempt
-                    if let status = fanWriteStatus[fan.index] {
-                        Text(status)
-                            .font(.caption2)
-                            .foregroundColor(fanNeedsAdmin[fan.index] == true ? .red : .green)
-                    }
-
-                    Spacer()
+                )
                 }
-                .padding(.top, 2)
             }
         }
         .padding(.vertical, 6)
     }
 
-    // MARK: - Helpers
+    // MARK: - Curve Panel
+
+    /// Drives a single fan in "调速" (curve) sub-mode: computes the target speed
+    /// from the current CPU temperature and writes it on change. Skips writes
+    /// when nothing changed, and hands control to the system when the
+    /// temperature exceeds the curve threshold.
+    ///
+    /// Static because it runs from the refresh timer's escaping closure
+    /// (which captures stores weakly, not the SwiftUI view instance).
+    private static func driveCurveFan(_ fan: FanInfo,
+                                      hardwareMonitor: HardwareMonitor,
+                                      curveStore: FanCurveStore) {
+        guard !hardwareMonitor.thermalThrottled else { return }
+        let temp = hardwareMonitor.maxCPUTemp
+        guard curveStore.subMode(for: fan.index) == .curve else { return }
+        let curve = curveStore.curve(for: fan.index, currentSpeed: fan.currentSpeed)
+
+        switch curve.targetSpeed(for: temp) {
+        case .speed(let target):
+            // Recovered back under threshold — re-enable manual control.
+            if curveStore.isSystemControlActive(for: fan.index) {
+                hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { _ in
+                    curveStore.setSystemControlActive(false, for: fan.index)
+                }
+            }
+            // Skip redundant writes.
+            if curveStore.lastWrittenSpeed(for: fan.index) != target {
+                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
+                    if ok { curveStore.recordWrittenSpeed(target, for: fan.index) }
+                }
+            }
+        case .systemControl:
+            // Hand over to system exactly once per over-threshold event.
+            guard !curveStore.isSystemControlActive(for: fan.index) else { return }
+            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { _ in
+                curveStore.setSystemControlActive(true, for: fan.index)
+            }
+        }
+    }
 
     /// Initializes fan UI state (manual modes and pending speeds) from
     /// current hardware values. Called on appear and on manual refresh.
@@ -940,12 +950,19 @@ struct TemperatureView: View {
     /// so no SMC traffic occurs in the background.
     private func makeRefreshTimer(onBattery: Bool) -> Timer {
         let tick = hardwareRefreshInterval(onBattery: onBattery)
-        let timer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak hardwareMonitor, weak thresholdStore] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak hardwareMonitor, weak thresholdStore, weak curveStore] _ in
             guard let hardwareMonitor, let thresholdStore else { return }
             if NSApplication.shared.isActive {
                 hardwareMonitor.partialRefresh(threshold: thresholdStore.threshold)
             } else {
                 hardwareMonitor.partialRefreshCPUAndGPU(threshold: thresholdStore.threshold)
+            }
+            // v0.2.0: drive temperature-curve fans after each refresh.
+            // Runs only with admin authorization so the curve can write speeds.
+            if let curveStore, hardwareMonitor.isAdminAuthorized {
+                for fan in hardwareMonitor.fans where curveStore.subMode(for: fan.index) == .curve {
+                    Self.driveCurveFan(fan, hardwareMonitor: hardwareMonitor, curveStore: curveStore)
+                }
             }
         }
         timer.tolerance = tick * 0.1

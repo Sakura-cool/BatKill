@@ -14,6 +14,7 @@ struct TestMain {
         // Register all test cases
         TestRunner.register("AppItemTests") { AppItemTests() }
         TestRunner.register("FanPresetTests") { FanPresetTests() }
+        TestRunner.register("FanCurveTests") { FanCurveTests() }
         TestRunner.register("ThresholdStoreTests") { ThresholdStoreTests() }
         TestRunner.register("HardwareModelsTests") { HardwareModelsTests() }
         TestRunner.register("LocalizationTests") { LocalizationTests() }
