@@ -57,6 +57,9 @@ struct SettingsView: View {
     @State private var showSelectedSheet = false
     /// Controls presentation of the "Pending Restore" sheet.
     @State private var showPendingRestoreSheet = false
+    /// Timer that keeps the header temperature badge updating while the
+    /// settings window is open, even if the Temperature window never opened.
+    @State private var hardwareRefreshTimer: Timer?
 
     // ──────────────────────────────────────────────
     // MARK: - Filtered Apps
@@ -106,6 +109,25 @@ struct SettingsView: View {
                 .padding(.vertical, 8)
         }
         .frame(width: 500, height: 640)
+        .onAppear { startHardwareRefresh() }
+        .onDisappear { stopHardwareRefresh() }
+    }
+
+    /// Refreshes sensor data on appear and keeps the temperature badge live
+    /// while the settings window is open. Without this the badge stays at 0
+    /// until the temperature window is opened once, because `refresh()` is
+    /// otherwise only triggered by `TemperatureView.onAppear`.
+    private func startHardwareRefresh() {
+        hardwareMonitor.refresh()
+        hardwareRefreshTimer?.invalidate()
+        hardwareRefreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            hardwareMonitor.partialRefreshCPUAndGPU()
+        }
+    }
+
+    private func stopHardwareRefresh() {
+        hardwareRefreshTimer?.invalidate()
+        hardwareRefreshTimer = nil
     }
 
     // ──────────────────────────────────────────────
