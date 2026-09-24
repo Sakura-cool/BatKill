@@ -2,13 +2,13 @@
 //  BatKill
 //
 //  Temperature-curve editor for the fan control "调速" (curve) sub-mode,
-//  shown as a chart (验收反馈 v3):
+//  shown as a chart (验收反馈 v3 + v4):
 //    - X axis: temperature 0 ... user threshold (°C), one grid per 10 °C
-//    - Y axis: fan speed minSpeed ... maxSpeed (RPM), one grid per 100 RPM
-//    - Tapping a node edits that step IN-PLACE (a compact stepper appears at
-//      the node, no separate panel — the window height never jumps)
-//    - A "生效 Apply" button writes the curve's target speed for the current
-//      CPU temperature (like the fixed-speed "设定转速" button).
+//    - Y axis: fan speed (RPM), adaptive range around the curve's actual
+//      speeds; labels shown in hundreds (300 → "3", unit "×100")
+//    - Tapping a node opens an inline text field + 确定/取消 for that step
+//    - A red vertical line marks the current CPU temperature with a label
+//    - A "生效 Apply" button writes the target speed for the current temp
 
 import SwiftUI
 
@@ -23,6 +23,10 @@ struct FanCurvePanel: View {
 
     /// Step index being edited in place on the chart; nil = none.
     @State private var editingStep: Int?
+    /// Text buffer for the inline step editor.
+    @State private var editText: String = ""
+    /// Transient validation message.
+    @State private var editError: String?
 
     var body: some View {
         let curve = currentCurve
@@ -54,7 +58,7 @@ struct FanCurvePanel: View {
 
     private func curveChart(for curve: FanCurve) -> some View {
         let maxStep = FanCurve.maxStepIndex(for: curve.threshold)
-        let bounds = chartBounds
+        let bounds = chartBounds(for: curve)
         let current = hardwareTemp()
         // Target speed at the current temperature for the Apply button.
         let targetSpeed: Double = {
@@ -66,14 +70,13 @@ struct FanCurvePanel: View {
             GeometryReader { geo in
                 let plot = plotRect(geo: geo, bounds: bounds)
                 ZStack {
-                    // Horizontal grid (speed), one per 100 RPM with labels.
+                    // Horizontal grid (speed), step 100 RPM, adaptive range.
                     ForEach(Array(stride(from: bounds.minY, through: bounds.maxY, by: 100)), id: \.self) { speed in
                         yGridLine(plot: plot, speed: speed)
-                        // Y-axis value label (RPM)
-                        Text("\(Int(speed))")
+                        Text("\(Int(speed / 100))")          // 300 → "3"
                             .font(.system(size: 8, design: .monospaced))
                             .foregroundColor(.secondary)
-                            .position(x: plot.x0 - 14, y: yFor(speed: speed, plot: plot, curve: curve))
+                            .position(x: plot.x0 - 14, y: yFor(speed: speed, plot: plot, bounds: bounds))
                     }
                     // Vertical grid (temperature), one per 10 °C with labels.
                     ForEach(0...maxStep, id: \.self) { k in
@@ -85,23 +88,35 @@ struct FanCurvePanel: View {
                             .position(x: xFor(temp: t, plot: plot, curve: curve), y: plot.y1 + 10)
                     }
                     // Curve polyline
-                    curvePath(plot: plot, curve: curve)
+                    curvePath(plot: plot, curve: curve, bounds: bounds)
                         .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                    // Current-temperature marker
+                    // Current-temperature marker (red vertical line + label)
                     Rectangle()
                         .fill(Color.red.opacity(0.5))
                         .frame(width: 1.5, height: plot.y1 - plot.y0)
                         .position(x: xFor(temp: current, plot: plot, curve: curve),
                                   y: (plot.y0 + plot.y1) / 2)
-                    // Tappable nodes (+ in-place editor for the selected one)
-                    nodes(plot: plot, curve: curve, maxStep: maxStep)
+                    Text("\(Int(current))°")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundColor(.red)
+                        .padding(.horizontal, 3)
+                        .background(Color(NSColor.windowBackgroundColor).opacity(0.7))
+                        .position(x: min(xFor(temp: current, plot: plot, curve: curve) + 8,
+                                         plot.x1 - 14),
+                                  y: plot.y0 + 8)
+                    // Tappable nodes (+ inline editor on selection)
+                    nodes(plot: plot, curve: curve, maxStep: maxStep, bounds: bounds)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
             }
             .frame(height: 150)
 
-            // Bottom legend: axis units + current-temp target
+            // Bottom legend: Y-axis unit + current-temp target + apply
             HStack {
+                Text(lm.translate("Y: ×100 RPM", "Y 轴: ×100 转/分"))
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Spacer()
                 Text(lm.translate("Current %d °C → %d RPM", "当前 %d °C → %d 转/分",
                                   Int(current), Int(targetSpeed)))
                     .font(.system(size: 9, design: .monospaced))
@@ -123,7 +138,7 @@ struct FanCurvePanel: View {
 
     private func yGridLine(plot: PlotRect, speed: Double) -> some View {
         Path { p in
-            let y = yFor(speed: speed, plot: plot, curve: currentCurve)
+            let y = yFor(speed: speed, plot: plot, bounds: plot.bounds)
             p.move(to: CGPoint(x: plot.x0, y: y))
             p.addLine(to: CGPoint(x: plot.x1, y: y))
         }
@@ -139,70 +154,104 @@ struct FanCurvePanel: View {
         .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
     }
 
-    private func curvePath(plot: PlotRect, curve: FanCurve) -> Path {
+    private func curvePath(plot: PlotRect, curve: FanCurve, bounds: (minY: Double, maxY: Double)) -> Path {
         var path = Path()
         let maxStep = FanCurve.maxStepIndex(for: curve.threshold)
         for k in 0...maxStep {
             let t = FanCurve.temperature(atStep: k, threshold: curve.threshold)
             let speed = curve.stepSpeeds[k] ?? 0
             let point = CGPoint(x: xFor(temp: t, plot: plot, curve: curve),
-                                y: yFor(speed: speed, plot: plot, curve: curve))
+                                y: yFor(speed: speed, plot: plot, bounds: bounds))
             if k == 0 { path.move(to: point) } else { path.addLine(to: point) }
         }
         return path
     }
 
-    /// Tappable nodes; the selected node shows a compact in-place stepper
-    /// (no separate panel, so the window height never jumps).
-    private func nodes(plot: PlotRect, curve: FanCurve, maxStep: Int) -> some View {
+    /// Tappable nodes; the selected node shows an inline text-field editor.
+    private func nodes(plot: PlotRect, curve: FanCurve, maxStep: Int,
+                       bounds: (minY: Double, maxY: Double)) -> some View {
         ForEach(0...maxStep, id: \.self) { k in
             let t = FanCurve.temperature(atStep: k, threshold: curve.threshold)
             let speed = curve.stepSpeeds[k] ?? 0
             let x = xFor(temp: t, plot: plot, curve: curve)
-            let y = yFor(speed: speed, plot: plot, curve: curve)
+            let y = yFor(speed: speed, plot: plot, bounds: bounds)
 
             if editingStep == k {
-                // In-place editor: stepper + quick value label.
-                HStack(spacing: 2) {
-                    Button("−") { nudgeStep(k, by: -100, curve: curve) }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 10, weight: .bold))
-                    Text("\(Int(speed))")
-                        .font(.system(size: 9, design: .monospaced))
-                        .frame(width: 42)
-                    Button("+") { nudgeStep(k, by: 100, curve: curve) }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 10, weight: .bold))
-                }
-                .padding(.horizontal, 3)
-                .padding(.vertical, 1)
-                .background(Color(NSColor.windowBackgroundColor).opacity(0.92))
-                .cornerRadius(4)
-                .overlay(RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.orange.opacity(0.6), lineWidth: 1))
-                .position(x: clampX(x, plot: plot), y: max(y, plot.y0 + 24))
+                nodeEditor(plot: plot, step: k, bounds: bounds)
             } else {
                 Circle()
                     .fill(Color.blue)
                     .frame(width: 10, height: 10)
                     .position(x: x, y: y)
-                    .onTapGesture { editingStep = k }
+                    .onTapGesture {
+                        editingStep = k
+                        editText = String(format: "%d", Int(speed))
+                        editError = nil
+                    }
             }
         }
     }
 
-    /// Keeps the in-place editor inside the horizontal plot bounds.
-    private func clampX(_ x: CGFloat, plot: PlotRect) -> CGFloat {
-        min(max(x, plot.x0 + 40), plot.x1 - 40)
+    /// Inline editor: numeric field + 确定/取消 (no −/+ steppers; see v4).
+    private func nodeEditor(plot: PlotRect, step: Int,
+                            bounds: (minY: Double, maxY: Double)) -> some View {
+        let curve = currentCurve
+        let temp = FanCurve.temperature(atStep: step, threshold: curve.threshold)
+        let speed = curve.stepSpeeds[step] ?? 0
+        let x = xFor(temp: temp, plot: plot, curve: curve)
+        let y = yFor(speed: speed, plot: plot, bounds: bounds)
+        return VStack(spacing: 1) {
+            HStack(spacing: 3) {
+                Text("\(Int(temp))°C")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Text(editError ?? "")
+                    .font(.system(size: 7, design: .monospaced))
+                    .foregroundColor(.red)
+                TextField("", text: $editText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 9, design: .monospaced))
+                    .frame(width: 44)
+                    .multilineTextAlignment(.trailing)
+                    .background(Color(NSColor.textBackgroundColor))
+                    .overlay(Rectangle().stroke(Color.secondary.opacity(0.4), lineWidth: 0.5))
+            }
+            .padding(.horizontal, 3)
+            .padding(.vertical, 2)
+            .background(Color(NSColor.windowBackgroundColor).opacity(0.95))
+            .cornerRadius(4)
+            .overlay(RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.orange.opacity(0.6), lineWidth: 1))
+
+            HStack(spacing: 4) {
+                Button(lm.translate("OK", "确定")) { commitEdit(step: step) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                Button(lm.translate("Cancel", "取消")) { editingStep = nil }
+                    .buttonStyle(.borderless)
+                    .controlSize(.mini)
+            }
+        }
+        .position(x: clampX(x, plot: plot), y: plot.y0 + 34)
     }
 
-    /// Adjusts one step, clamps to [minSpeed, maxSpeed], smooths, persists,
-    /// and keeps the editor open for further nudging.
-    private func nudgeStep(_ step: Int, by delta: Double, curve: FanCurve) {
-        let speed = curve.stepSpeeds[step] ?? fan.minSpeed
-        var updated = curve
-        updated.stepSpeeds[step] = min(max(speed + delta, fan.minSpeed), fan.maxSpeed)
+    /// Commits the typed speed, clamps, smooths, persists.
+    private func commitEdit(step: Int) {
+        guard let value = Double(editText), value.isFinite else {
+            editError = "0~\(Int(fan.maxSpeed))"
+            return
+        }
+        var updated = currentCurve
+        updated.stepSpeeds[step] = min(max(value, fan.minSpeed), fan.maxSpeed)
         curveStore.setCurve(updated.smoothed(), for: fan.index)
+        editingStep = nil
+        editText = ""
+        editError = nil
+    }
+
+    /// Keeps the inline editor inside the horizontal plot bounds.
+    private func clampX(_ x: CGFloat, plot: PlotRect) -> CGFloat {
+        min(max(x, plot.x0 + 50), plot.x1 - 50)
     }
 
     // MARK: - Temp
@@ -215,14 +264,25 @@ struct FanCurvePanel: View {
 
     private struct PlotRect {
         let x0: CGFloat, x1: CGFloat, y0: CGFloat, y1: CGFloat
+        let bounds: (minY: Double, maxY: Double)
     }
 
-    private var chartBounds: (minY: Double, maxY: Double) {
-        (fan.minSpeed, max(fan.maxSpeed, fan.minSpeed + 100))
+    /// Adaptive Y range: only the curve's actual speed span (rounded to
+    /// 100s with a small margin), so a 1000–2000 curve fills the chart
+    /// instead of a dense 0–maxSpeed grid.
+    private func chartBounds(for curve: FanCurve) -> (minY: Double, maxY: Double) {
+        let speeds = curve.stepSpeeds.values
+        let rawMin = speeds.min() ?? fan.minSpeed
+        let rawMax = speeds.max() ?? fan.maxSpeed
+        let lo = max(fan.minSpeed, floor((rawMin - 100) / 100) * 100)
+        var hi = min(fan.maxSpeed, ceil((rawMax + 100) / 100) * 100)
+        if hi - lo < 200 { hi = lo + 200 }
+        return (lo, hi)
     }
 
     private func plotRect(geo: GeometryProxy, bounds: (minY: Double, maxY: Double)) -> PlotRect {
-        PlotRect(x0: 30, x1: geo.size.width - 8, y0: 8, y1: geo.size.height - 22)
+        PlotRect(x0: 30, x1: geo.size.width - 8, y0: 8,
+                 y1: geo.size.height - 22, bounds: bounds)
     }
 
     private func xFor(temp: Double, plot: PlotRect, curve: FanCurve) -> CGFloat {
@@ -231,8 +291,7 @@ struct FanCurvePanel: View {
         return plot.x0 + ratio * (plot.x1 - plot.x0)
     }
 
-    private func yFor(speed: Double, plot: PlotRect, curve: FanCurve) -> CGFloat {
-        let bounds = chartBounds
+    private func yFor(speed: Double, plot: PlotRect, bounds: (minY: Double, maxY: Double)) -> CGFloat {
         let range = bounds.maxY - bounds.minY
         let ratio = CGFloat(min(max(speed, bounds.minY), bounds.maxY) - bounds.minY) / CGFloat(range)
         return plot.y1 - ratio * (plot.y1 - plot.y0)
