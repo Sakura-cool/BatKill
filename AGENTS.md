@@ -1,7 +1,7 @@
 # BatKill — 项目知识库
 
 **更新日期:** 2026-09-20
-**版本:** v0.1.6
+**版本:** v0.1.7
 **技术栈:** Swift 5 / SwiftUI / AppKit / IOKit / Combine / AuthorizationServices
 **目标系统:** macOS 14.0+ (arm64 + x86_64)
 **Bundle ID:** com.batkill.app
