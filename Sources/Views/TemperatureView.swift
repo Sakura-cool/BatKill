@@ -771,14 +771,12 @@ struct TemperatureView: View {
 
     private func authorizeCurveFan(for fan: FanInfo) {
         if HardwareMonitor.adminExecBlocked {
-            fanWriteStatus[fan.index] = lm.translate("Admin channel unavailable", "提权通道不可用")
-            return
+            HardwareMonitor.retryAdminExec()
+            fanWriteStatus[fan.index] = lm.translate("Retrying admin channel…", "重试提权通道…")
         }
         HardwareMonitor.resetAuthDenied()
         if hardwareMonitor.requestAdminAuth() {
-            bringAppToFront()
-            clearAllNeedsAdmin()
-            applyCurveSpeed(for: fan)
+            bringAppToFront(); clearAllNeedsAdmin(); applyCurveSpeed(for: fan)
         } else {
             fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
         }
@@ -804,13 +802,12 @@ struct TemperatureView: View {
 
     private func authorizeFixedFan(for index: Int) {
         if HardwareMonitor.adminExecBlocked {
-            fanWriteStatus[index] = lm.translate("Admin channel unavailable", "提权通道不可用")
-            return
+            HardwareMonitor.retryAdminExec()
+            fanWriteStatus[index] = lm.translate("Retrying admin channel…", "重试提权通道…")
         }
         HardwareMonitor.resetAuthDenied()
         if hardwareMonitor.requestAdminAuth() {
-            bringAppToFront()
-            clearAllNeedsAdmin()
+            bringAppToFront(); clearAllNeedsAdmin()
             let speed = fanPendingSpeeds[index] ?? 0
             writeFixedSpeed(speed, for: index)
         } else {
@@ -914,10 +911,8 @@ struct TemperatureView: View {
         }
         return SavePresetSheet(
             fans: hardwareMonitor.fans,
-            autoModes: autoModes,
-            subModes: subModes,
-            pendingSpeeds: fanPendingSpeeds,
-            curves: curves,
+            autoModes: autoModes, subModes: subModes,
+            pendingSpeeds: fanPendingSpeeds, curves: curves,
             lm: lm,
             onSave: { name in
                 newPresetName = name
@@ -927,7 +922,6 @@ struct TemperatureView: View {
             onCancel: { newPresetName = ""; showingSaveAlert = false }
         )
     }
-
     private func saveCurrentAsPreset() {
         var speeds: [Int: Double] = [:]
         var autoModes: [Int: Bool] = [:]
@@ -935,12 +929,18 @@ struct TemperatureView: View {
         var curves: [Int: FanCurve] = [:]
         for fan in hardwareMonitor.fans {
             speeds[fan.index] = fanPendingSpeeds[fan.index] ?? fan.currentSpeed
-            autoModes[fan.index] = !(fanManualModes[fan.index] ?? false)
-            subModes[fan.index] = curveStore.subMode(for: fan.index)
-            if subModes[fan.index] == .curve {
-                curves[fan.index] = curveStore.curve(for: fan.index,
-                                                     minSpeed: fan.minSpeed,
-                                                     maxSpeed: fan.maxSpeed)
+            let isAuto = !(fanManualModes[fan.index] ?? false)
+            autoModes[fan.index] = isAuto
+            // Only manual fans persist a sub-mode/curve — auto fans must not
+            // carry a stale curve into the preset (CHANGE-016).
+            if !isAuto {
+                let mode = curveStore.subMode(for: fan.index)
+                subModes[fan.index] = mode
+                if mode == .curve {
+                    curves[fan.index] = curveStore.curve(for: fan.index,
+                                                         minSpeed: fan.minSpeed,
+                                                         maxSpeed: fan.maxSpeed)
+                }
             }
         }
         let preset = FanPreset(name: newPresetName,

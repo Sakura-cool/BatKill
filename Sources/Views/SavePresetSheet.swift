@@ -28,14 +28,18 @@ struct SavePresetFanRow: View {
 
             Spacer()
 
-            // Fixed speed readout or curve thumbnail
-            if subMode == .curve {
-                if let curve {
-                    CurveThumbnail(curve: curve)
-                        .frame(width: 96, height: 28)
-                } else {
-                    Text("—")
-                        .font(.caption2).foregroundColor(.secondary)
+            if !isAuto && subMode == .curve {
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let curve {
+                        Text("\(Int(curve.curveRange.min)) - \(Int(curve.curveRange.max)) RPM")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.secondary)
+                        CurveThumbnail(curve: curve)
+                            .frame(width: 96, height: 22)
+                    } else {
+                        Text("—")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
                 }
             } else if !isAuto {
                 Text("\(Int(speed)) RPM")
