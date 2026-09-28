@@ -128,7 +128,7 @@ struct SavePresetSheet: View {
                     ForEach(fans) { fan in
                         SavePresetFanRow(
                             fan: fan,
-                            isAuto: !(autoModes[fan.index] ?? false),
+                            isAuto: autoModes[fan.index] ?? true,
                             subMode: subModes[fan.index] ?? .fixed,
                             speed: pendingSpeeds[fan.index] ?? fan.currentSpeed,
                             curve: curves[fan.index],
