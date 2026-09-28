@@ -33,6 +33,9 @@ struct FanCurvePanel: View {
     @State private var editText: String = ""
     /// Transient validation message.
     @State private var editError: String?
+    /// Debounced apply: scheduled 0.1s after a node edit/drag so rapid
+    /// adjustments coalesce into one SMC write (CHANGE-018).
+    @State private var applyTask: Task<Void, Never>?
 
     var body: some View {
         let curve = currentCurve
@@ -142,8 +145,8 @@ struct FanCurvePanel: View {
             }
             .frame(height: 150)
 
-            // Action row: Apply (like fixed-speed 设定转速) + authorize +
-            // status message — mirrors FanFixedSpeedControls interaction.
+            // Action row: target readout + authorize (no explicit Apply
+            // button — curve edits apply after a 0.1s debounce, CHANGE-018).
             HStack(spacing: 8) {
                 Text(lm.translate("Y: ×100 RPM", "Y 轴: ×100 转/分"))
                     .font(.system(size: 8, design: .monospaced))
@@ -154,16 +157,6 @@ struct FanCurvePanel: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.red)
                 Spacer()
-                Button {
-                    onApplySpeed?(targetSpeed)
-                } label: {
-                    Label(lm.translate("Set Speed", "设定转速"), systemImage: "checkmark.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(.blue)
-                .help(lm.translate("Write current curve speed to the fan",
-                                   "将当前温度对应的目标转速写入风扇"))
 
                 // Admin authorization button (shown after first failed attempt)
                 if needsAdmin {
@@ -175,13 +168,25 @@ struct FanCurvePanel: View {
                     .controlSize(.small)
                     .tint(.orange)
                 }
+            }
+        }
+        .onDisappear {
+            applyTask?.cancel()
+            applyTask = nil
+        }
+    }
 
-                // Status message after write attempt
-                if let status = statusMessage {
-                    Text(status)
-                        .font(.caption2)
-                        .foregroundColor(needsAdmin ? .red : .green)
-                }
+    /// Debounced apply of the target speed for the current temperature:
+    /// cancels any pending apply and runs one 0.1s later.
+    private func scheduleApply() {
+        applyTask?.cancel()
+        applyTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled else { return }
+            let curve = currentCurve
+            let current = hardwareTemp()
+            if case .speed(let v) = curve.targetSpeed(for: current) {
+                onApplySpeed?(v)
             }
         }
     }
@@ -298,6 +303,7 @@ struct FanCurvePanel: View {
         editingStep = nil
         editText = ""
         editError = nil
+        scheduleApply()
     }
 
     /// Keeps the inline editor inside the horizontal plot bounds.
@@ -374,6 +380,7 @@ struct FanCurvePanel: View {
             }
             .onEnded { _ in
                 curveStore.save()   // persist the dragged curve once
+                scheduleApply()     // apply the new target after 0.1s
             }
     }
 }

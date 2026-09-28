@@ -2,16 +2,13 @@
 //  BatKill
 //
 //  Fixed-speed (定速) controls for a fan's manual sub-mode: a speed slider
-//  with +/- steppers, min/max labels, a "Set Speed" button, and the admin
-//  authorization flow. Extracted from TemperatureView to keep that file
-//  under the SwiftLint ratchet limits.
+//  with +/- steppers and min/max labels. The slider applies the speed
+//  automatically after a 0.1s debounce (no separate "Set Speed" button);
+//  the admin authorization flow is kept.
 
 import SwiftUI
 
 /// SwiftUI view rendering a fan's fixed-speed controls.
-///
-/// Parameter callbacks let the parent (TemperatureView) own the fan state
-/// dictionaries while this view only renders and forwards user actions.
 struct FanFixedSpeedControls: View {
     let fan: FanInfo
     let lm: LocalizationManager
@@ -21,32 +18,34 @@ struct FanFixedSpeedControls: View {
     let statusMessage: String?
     let needsAdmin: Bool
 
-    /// Called with the pending speed when the user taps "Set Speed".
+    /// Called with the pending speed after the 0.1s debounce elapses.
     var onSetSpeed: (Double) -> Void
     /// Called when the user taps "Authorize Admin".
     var onAuthorize: () -> Void
 
+    @State private var debounceTask: Task<Void, Never>?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Speed slider with +/- buttons
             HStack(spacing: 8) {
                 Image(systemName: "minus")
                     .font(.caption2)
                     .foregroundColor(.secondary)
 
                 Slider(value: $pendingSpeed, in: 0...fan.maxSpeed, step: 100)
+                    .onChange(of: pendingSpeed) { newValue in
+                        scheduleApply(newValue)
+                    }
 
                 Image(systemName: "plus")
                     .font(.caption2)
                     .foregroundColor(.secondary)
 
-                // Numeric readout of pending speed
                 Text(String(format: "%d", Int(pendingSpeed)))
                     .font(.system(.caption, design: .monospaced))
                     .frame(width: 50, alignment: .trailing)
             }
 
-            // Min/Max speed labels
             HStack {
                 Text(lm.translate("Min: %d", "最小: %d", Int(fan.minSpeed)))
                     .font(.caption2)
@@ -57,16 +56,7 @@ struct FanFixedSpeedControls: View {
                     .foregroundColor(.secondary)
             }
 
-            // Action buttons: Set Speed, Authorize Admin, status message
             HStack(spacing: 8) {
-                Button { onSetSpeed(pendingSpeed) } label: {
-                    Label(lm.translate("Set Speed", "设定转速"), systemImage: "checkmark.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(.blue)
-
-                // Admin authorization button (shown after first failed attempt)
                 if needsAdmin {
                     Button(action: onAuthorize) {
                         Label(lm.translate("Authorize Admin", "授权管理员"), systemImage: "lock.shield")
@@ -76,16 +66,30 @@ struct FanFixedSpeedControls: View {
                     .tint(.orange)
                 }
 
-                // Status message after write attempt
-                if let status = statusMessage {
+                if let status = statusMessage, !needsAdmin {
                     Text(status)
                         .font(.caption2)
-                        .foregroundColor(needsAdmin ? .red : .green)
+                        .foregroundColor(.green)
                 }
 
                 Spacer()
             }
             .padding(.top, 2)
+        }
+        .onDisappear {
+            debounceTask?.cancel()
+            debounceTask = nil
+        }
+    }
+
+    /// Cancels any pending apply and schedules a new one 0.1s later so
+    /// rapid slider drags coalesce into a single SMC write (CHANGE-018).
+    private func scheduleApply(_ value: Double) {
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled else { return }
+            onSetSpeed(value)
         }
     }
 }
