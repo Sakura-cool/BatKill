@@ -21,7 +21,7 @@ struct AdminGateOverlay: View {
                     .font(.system(size: 28))
                     .foregroundColor(.white)
                 Button(action: onAuthorize) {
-                    Label(lm.translate("Authorize Admin", "管理员授权"),
+                    Label(lm.translate("Enable Fan Control", "启用风扇控制"),
                           systemImage: "lock.shield")
                         .font(.headline)
                         .padding(.horizontal, 20)
@@ -32,8 +32,8 @@ struct AdminGateOverlay: View {
                 .tint(.blue)
 
                 if authDenied {
-                    Text(lm.translate("Admin authorization required to use fan controls",
-                                      "只有管理员授权后才能使用风扇控制"))
+                    Text(lm.translate("Fan control requires a one-time admin authorization",
+                                      "风扇控制需要一次性管理员授权"))
                         .font(.caption2)
                         .foregroundColor(.white)
                         .multilineTextAlignment(.center)

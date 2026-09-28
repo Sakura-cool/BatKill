@@ -43,6 +43,7 @@ MAIN_SOURCES=$(find "$SRC_DIR" -name '*.swift' \
   | grep -v 'AppDelegate.swift' \
   | grep -v 'Main.swift' \
   | grep -v 'main.swift' \
+  | grep -v 'BatKillFanCLI.swift' \
   | sort)
 
 # Test source files

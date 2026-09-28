@@ -70,7 +70,9 @@ build_arch() {
 
   mkdir -p "$build_dir"
 
-  SWIFT_FILES=$(find "$SRC_DIR" -name '*.swift' | sort)
+  # Exclude the standalone privileged CLI (batkill-fan) from the app build —
+  # it has its own @main and is compiled separately (CHANGE-019).
+  SWIFT_FILES=$(find "$SRC_DIR" -name '*.swift' ! -name 'BatKillFanCLI.swift' | sort)
 
   # ── Architecture-specific optimization flags ──
   # arm64: enable long-function diagnostics (catches slow compilations)
@@ -106,6 +108,10 @@ build_arch() {
   chmod +x "${app_bundle}/Contents/MacOS/${APP_NAME}"
   cp "${RES_DIR}/Info.plist"     "${app_bundle}/Contents/"
 
+  # Embed the privileged CLI for one-time installation (CHANGE-019).
+  cp "${build_dir}/batkill-fan" "${app_bundle}/Contents/Resources/"
+  chmod +x "${app_bundle}/Contents/Resources/batkill-fan"
+
   if [ -f "${RES_DIR}/AppIcon.icns" ]; then
     cp "${RES_DIR}/AppIcon.icns" "${app_bundle}/Contents/Resources/"
   fi
@@ -116,8 +122,46 @@ build_arch() {
   echo "  ✅ ${app_bundle}"
 }
 
+# ── Build standalone privileged CLI (batkill-fan) ──
+# Installed root-owned and invoked via `sudo -n` for SMC fan writes
+# (CHANGE-019). Built once for the native arch (the sudoers rule pins the
+# exact path, so a fat binary is unnecessary).
+build_cli() {
+  local arch="$1"
+  local target="${arch}-apple-macosx14.0"
+  local build_dir=".build/${arch}"
+  local cli_out="${build_dir}/batkill-fan"
+
+  echo ""
+  echo "🚧 Building batkill-fan CLI for ${arch} …"
+
+  mkdir -p "$build_dir"
+
+  swiftc \
+    -sdk "$SDK_PATH" \
+    -target "$target" \
+    -O \
+    -o "$cli_out" \
+    Sources/App/BatKillFanCLI.swift \
+    Sources/App/CLIFanWriter.swift \
+    Sources/Core/Logger.swift \
+    Sources/Core/Extensions.swift \
+    Sources/Models/HardwareModels.swift \
+    Sources/Services/HardwareMonitor.swift \
+    Sources/Services/TemperatureReading.swift \
+    Sources/Services/FanController.swift \
+    Sources/Services/FanInstallManager.swift \
+    -framework IOKit \
+    -framework Security \
+    -framework Foundation
+
+  chmod +x "$cli_out"
+  echo "  ✅ ${cli_out}"
+}
+
 # ── Build all requested architectures ──
 for arch in "${ARCHES[@]}"; do
+  build_cli "$arch"
   build_arch "$arch"
 done
 

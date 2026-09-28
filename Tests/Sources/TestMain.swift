@@ -23,6 +23,8 @@ struct TestMain {
         TestRunner.register("LoggerTests") { LoggerTests() }
         TestRunner.register("HardwareMonitorTests") { HardwareMonitorTests() }
         TestRunner.register("ProcessRunnerTests") { ProcessRunnerTests() }
+        TestRunner.register("FanInstallManagerTests") { FanInstallManagerTests() }
+        TestRunner.register("FanControllerTests") { FanControllerTests() }
 
         // Run all tests
         TestRunner.runAll()

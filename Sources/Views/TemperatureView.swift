@@ -114,8 +114,8 @@ struct TemperatureView: View {
                                     presetSection
                                     fanSection
                                 }
-                                .blur(radius: hardwareMonitor.isAdminAuthorized ? 0 : 8)
-                                if !hardwareMonitor.isAdminAuthorized {
+                                .blur(radius: hardwareMonitor.fanControlEnabled ? 0 : 8)
+                                if !hardwareMonitor.fanControlEnabled {
                                     adminGateOverlay
                                 }
                             }
@@ -141,13 +141,13 @@ struct TemperatureView: View {
             // the preset manually.
             if let preset = presetStore.activePreset {
                 let needsAdmin = preset.fanAutoModes.values.contains(false)
-                if !needsAdmin || hardwareMonitor.isAdminAuthorized {
+                if !needsAdmin || hardwareMonitor.fanControlEnabled {
                     executePreset(preset)
                 }
             }
             // Set up thermal throttle callback to auto-release fans
             hardwareMonitor.onThermalThrottle = {
-                guard hardwareMonitor.isAdminAuthorized else { return }
+                guard hardwareMonitor.fanControlEnabled else { return }
                 // Save current fan states so they can be restored on cooldown
                 savedFanModes = fanManualModes
                 savedFanSpeeds = fanPendingSpeeds
@@ -163,7 +163,7 @@ struct TemperatureView: View {
             }
             // Set up thermal cooldown callback to restore user settings
             hardwareMonitor.onThermalCooldown = {
-                guard hardwareMonitor.isAdminAuthorized else { return }
+                guard hardwareMonitor.fanControlEnabled else { return }
                 guard !savedFanModes.isEmpty else { return }
                 // Restore the manual modes and speeds that were active before throttle
                 for fan in hardwareMonitor.fans {
@@ -634,13 +634,15 @@ struct TemperatureView: View {
 
     private var adminGateOverlay: some View {
         AdminGateOverlay(
-            authDenied: HardwareMonitor.authDenied,
+            authDenied: !hardwareMonitor.fanControlEnabled,
             lm: lm,
             onAuthorize: {
-                HardwareMonitor.resetAuthDenied()
-                if hardwareMonitor.requestAdminAuth() {
-                    bringAppToFront()
-                    clearAllNeedsAdmin()
+                FanInstallManager.install { ok in
+                    if ok {
+                        hardwareMonitor.refreshFanControlEnabled()
+                        clearAllNeedsAdmin()
+                        bringAppToFront()
+                    }
                 }
             }
         )
@@ -768,7 +770,7 @@ struct TemperatureView: View {
     /// Static because it runs from the refresh timer's escaping closure
     /// (which captures stores weakly, not the SwiftUI view instance).
     private func applyCurveSpeed(for fan: FanInfo) {
-        if hardwareMonitor.isAdminAuthorized {
+        if hardwareMonitor.fanControlEnabled {
             let target = curveStore.targetSpeed(for: fan.index,
                                                 fan: fan,
                                                 maxTemp: hardwareMonitor.maxCPUTemp)
@@ -781,20 +783,19 @@ struct TemperatureView: View {
     }
 
     private func authorizeCurveFan(for fan: FanInfo) {
-        if HardwareMonitor.adminExecBlocked {
-            HardwareMonitor.retryAdminExec()
-            fanWriteStatus[fan.index] = lm.translate("Retrying admin channel…", "重试提权通道…")
-        }
-        HardwareMonitor.resetAuthDenied()
-        if hardwareMonitor.requestAdminAuth() {
-            bringAppToFront(); clearAllNeedsAdmin(); applyCurveSpeed(for: fan)
-        } else {
-            fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
+        FanInstallManager.install { ok in
+            if ok {
+                hardwareMonitor.refreshFanControlEnabled()
+                clearAllNeedsAdmin()
+                applyCurveSpeed(for: fan)
+            } else {
+                fanWriteStatus[fan.index] = lm.translate("Install Failed", "安装失败")
+            }
         }
     }
 
     private func writeFixedSpeed(_ speed: Double, for index: Int) {
-        if hardwareMonitor.isAdminAuthorized {
+        if hardwareMonitor.fanControlEnabled {
             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: index, speed: speed) { ok in
                 fanWriteStatus[index] = ok ? lm.translate("Set (Admin)", "已设定(管理员)") : lm.translate("Failed", "失败")
             }
@@ -803,24 +804,22 @@ struct TemperatureView: View {
         }
     }
 
-    /// One successful auth clears the flag for every fan (no repeat prompts).
+    /// One successful install clears the flag for every fan.
     private func clearAllNeedsAdmin() {
         fanNeedsAdmin.removeAll()
         fanWriteStatus.removeAll()
     }
 
     private func authorizeFixedFan(for index: Int) {
-        if HardwareMonitor.adminExecBlocked {
-            HardwareMonitor.retryAdminExec()
-            fanWriteStatus[index] = lm.translate("Retrying admin channel…", "重试提权通道…")
-        }
-        HardwareMonitor.resetAuthDenied()
-        if hardwareMonitor.requestAdminAuth() {
-            bringAppToFront(); clearAllNeedsAdmin()
-            let speed = fanPendingSpeeds[index] ?? 0
-            writeFixedSpeed(speed, for: index)
-        } else {
-            fanWriteStatus[index] = lm.translate("Auth Denied", "授权被拒绝")
+        FanInstallManager.install { ok in
+            if ok {
+                hardwareMonitor.refreshFanControlEnabled()
+                clearAllNeedsAdmin()
+                let speed = fanPendingSpeeds[index] ?? 0
+                writeFixedSpeed(speed, for: index)
+            } else {
+                fanWriteStatus[index] = lm.translate("Install Failed", "安装失败")
+            }
         }
     }
 
@@ -846,22 +845,18 @@ struct TemperatureView: View {
     }
 
     /// Applies a fan preset. If the preset requires manual fan modes and
-    /// admin is not yet authorized, requests authorization first.
+    /// the sudo channel is not installed, runs the one-time install first.
     private func applyPreset(_ preset: FanPreset?) {
         guard let preset = preset else { return }
 
         let needsAdmin = preset.fanAutoModes.values.contains(false)
-        if needsAdmin && !hardwareMonitor.isAdminAuthorized {
-            if HardwareMonitor.adminExecBlocked {
-                fanWriteStatus = [:]
-                return
-            }
-            // User explicitly tapped a preset — reset denied flag so the
-            // auth dialog appears when they're ready to try again.
-            HardwareMonitor.resetAuthDenied()
-            if hardwareMonitor.requestAdminAuth() {
-                bringAppToFront()
-                executePreset(preset)
+        if needsAdmin && !hardwareMonitor.fanControlEnabled {
+            FanInstallManager.install { ok in
+                if ok {
+                    hardwareMonitor.refreshFanControlEnabled()
+                    bringAppToFront()
+                    executePreset(preset)
+                }
             }
         } else {
             executePreset(preset)
@@ -974,7 +969,7 @@ struct TemperatureView: View {
                 hardwareMonitor.partialRefreshCPUAndGPU(threshold: thresholdStore.threshold)
             }
             curveStore?.lastReadCPUTemp = hardwareMonitor.maxCPUTemp
-            if let curveStore, hardwareMonitor.isAdminAuthorized {
+            if let curveStore, hardwareMonitor.fanControlEnabled {
                 for fan in hardwareMonitor.fans where curveStore.subMode(for: fan.index) == .curve {
                     curveStore.driveFan(fan: fan, hardwareMonitor: hardwareMonitor)
                 }

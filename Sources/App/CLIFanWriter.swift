@@ -63,6 +63,23 @@ func handleCLIArgs() -> Bool {
         exit(monitor.lastFanWriteOK ? 0 : 1)
     }
 
+    // --get-fan <fanIndex>
+    // Prints the fan's current speed (RPM) to stdout. Reads don't need root.
+    if args[1] == "--get-fan", args.count == 3 {
+        guard let fanIndex = Int(args[2]), fanIndex >= 0, maxFanIndex >= fanIndex else {
+            fputs("batkill-fan: 非法风扇索引参数 \(args[2])\n", stderr)
+            exit(1)
+        }
+        let monitor = HardwareMonitor()
+        let fan = monitor.readFans().first { $0.index == fanIndex }
+        if let fan {
+            print("\(Int(fan.currentSpeed))")
+            exit(0)
+        }
+        fputs("batkill-fan: 风扇 \(fanIndex) 未找到\n", stderr)
+        exit(1)
+    }
+
     return false
 }
 

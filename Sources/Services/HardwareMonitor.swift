@@ -61,6 +61,15 @@ final class HardwareMonitor: ObservableObject {
     /// Whether admin authorization has been granted for SMC writes.
     @Published var isAdminAuthorized = false
 
+    /// Whether the batkill-fan sudo channel is installed and ready
+    /// (CHANGE-019). Drives the fan-control UI gate.
+    @Published var fanControlEnabled = FanInstallManager.isInstalled()
+
+    /// Re-checks the sudo channel state after an install/uninstall attempt.
+    func refreshFanControlEnabled() {
+        fanControlEnabled = FanInstallManager.isInstalled()
+    }
+
     // MARK: Callbacks
 
     /// Called once when `thermalThrottled` transitions from false to true.

@@ -174,59 +174,47 @@ extension HardwareMonitor {
     }()
 
     func runWithAdmin(args: [String], completion: @escaping (Bool) -> Void) {
-        // Hard-stop once the channel is latched blocked: every AEWP call
-        // (even with a valid authRef) re-triggers the system auth dialog on
-        // current macOS, so manual mode switches / writes must not fire it
-        // repeatedly. Only an explicit user retry re-arms (CHANGE-016).
+        // Hard-stop once the channel is latched blocked. The sudo channel is
+        // stable (no per-call dialog), but a failure latch still prevents
+        // hammering when the tool/sudoers rule is missing (CHANGE-019).
         guard !HardwareMonitor.adminExecBlocked else {
-            logger("FanController: 提权通道已锁存，写入被跳过（避免重复弹窗）")
+            logger("FanController: 提权通道已锁存，写入被跳过")
             completion(false)
             return
         }
-        guard let authRef = HardwareMonitor.authRef,
-              let execPath = Bundle.main.executablePath else {
-            logger("FanController: 提权通道不可用（未授权或取不到可执行路径），写入被拒绝")
-            completion(false)
-            return
-        }
-
-        // v0.1.6 FIX-002（方案 B 收口）：符号缺失时显式失败并记录，不静默
-        guard let exec = Self.authExecFunc else {
-            logger("FanController: AuthorizationExecuteWithPrivileges 不可用（系统已废弃该 API），提权写入被拒绝")
+        guard FanInstallManager.isSudoReady() else {
+            logger("FanController: sudo 通道未就绪（未安装 batkill-fan 或 sudoers 规则），写入被拒绝")
             completion(false)
             return
         }
 
-        // Serialize all privileged exec on one queue: only ONE
-        // AuthorizationExecuteWithPrivileges (and thus one system dialog)
-        // runs at a time. Concurrent per-fan timer writes would otherwise
-        // stack multiple dialogs (CHANGE-016).
+        // Serialize all sudo invocations on one queue: only one privileged
+        // write in flight at a time (CHANGE-016).
         HardwareMonitor.adminAuthQueue.async { [weak self] in
-            // Convert Swift strings to C strings for the auth API
-            var cArgs = args.map { strdup($0) }
-            defer { cArgs.forEach { free($0) } }
-
-            let status = cArgs.withUnsafeMutableBufferPointer { buf in
-                exec(authRef, execPath, [], buf.baseAddress, nil)
-            }
-
-            guard status == errAuthorizationSuccess else {
-                logger("FanController: 提权执行失败（OSStatus \(status)）")
-                // Latch the failure so automatic/timer writes stop hammering
-                // the broken channel; only explicit user retries may re-arm.
-                if status == -60006 {  // errAuthorizationDenied on macOS 27
-                    HardwareMonitor.adminExecBlocked = true
-                    HardwareMonitor.adminExecBlockedAt = Date().timeIntervalSinceReferenceDate
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            p.arguments = ["-n", FanInstallManager.cliPath] + args
+            p.standardOutput = Pipe()
+            p.standardError = Pipe()
+            p.terminationHandler = { proc in
+                let ok = proc.terminationStatus == 0
+                if !ok {
+                    logger("FanController: sudo batkill-fan 失败（exit \(proc.terminationStatus)）")
+                    // Latch on repeated failure so timers don't spam.
+                    if HardwareMonitor.adminExecBlockedAt == 0 {
+                        HardwareMonitor.adminExecBlocked = true
+                        HardwareMonitor.adminExecBlockedAt = Date().timeIntervalSinceReferenceDate
+                    }
                 }
                 self?.refresh()
-                DispatchQueue.main.async { completion(false) }
-                return
+                DispatchQueue.main.async { completion(ok) }
             }
-
-            // refresh() handles its own background/main-thread scheduling
-            self?.refresh()
-            DispatchQueue.main.async {
-                completion(true)
+            do {
+                try p.run()
+            } catch {
+                logger("FanController: 启动 sudo 失败 \(error.localizedDescription)")
+                self?.refresh()
+                DispatchQueue.main.async { completion(false) }
             }
         }
     }
