@@ -174,6 +174,15 @@ extension HardwareMonitor {
     }()
 
     func runWithAdmin(args: [String], completion: @escaping (Bool) -> Void) {
+        // Hard-stop once the channel is latched blocked: every AEWP call
+        // (even with a valid authRef) re-triggers the system auth dialog on
+        // current macOS, so manual mode switches / writes must not fire it
+        // repeatedly. Only an explicit user retry re-arms (CHANGE-016).
+        guard !HardwareMonitor.adminExecBlocked else {
+            logger("FanController: 提权通道已锁存，写入被跳过（避免重复弹窗）")
+            completion(false)
+            return
+        }
         guard let authRef = HardwareMonitor.authRef,
               let execPath = Bundle.main.executablePath else {
             logger("FanController: 提权通道不可用（未授权或取不到可执行路径），写入被拒绝")
@@ -233,6 +242,15 @@ extension HardwareMonitor {
             completion(false)
             return
         }
+        // Reuse the granted auth: try a direct SMC write first. On current
+        // macOS the deprecated AEWP re-prompts even with a valid authRef,
+        // so the direct path avoids the repeated dialog while the elevated
+        // path remains the fallback (CHANGE-016).
+        if isAdminAuthorized {
+            let ok = setFanMode(fanIndex: fanIndex, auto: auto)
+            completion(ok)
+            return
+        }
         let mode = auto ? 0 : 1
         runWithAdmin(args: ["--set-fan-mode", "\(fanIndex)", "\(mode)"], completion: completion)
     }
@@ -258,6 +276,13 @@ extension HardwareMonitor {
         if target != speed {
             logger("FanController: 转速 \(Int(speed)) 超出范围 "
                 + "[\(Int(fan.minSpeed)), \(Int(fan.maxSpeed))]，已收敛为 \(Int(target))")
+        }
+        // Reuse the granted auth: direct SMC write first (avoids the
+        // repeated AEWP dialog on current macOS); elevated path as fallback.
+        if isAdminAuthorized {
+            let ok = setFanSpeed(fanIndex: fanIndex, speed: target)
+            completion(ok)
+            return
         }
         runWithAdmin(args: ["--set-fan", "\(fanIndex)", "\(Int(target))"], completion: completion)
     }
