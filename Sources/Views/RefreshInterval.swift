@@ -25,3 +25,7 @@ func hardwareRefreshInterval(onBattery: Bool) -> TimeInterval {
 func batteryPollInterval(onBattery: Bool) -> TimeInterval {
     onBattery ? 15.0 : 5.0
 }
+
+/// Debounce delay (0.1s) before a slider/curve edit applies its write, so
+/// rapid drags coalesce into one SMC write (CHANGE-018).
+let fanApplyDebounceNs: UInt64 = 100_000_000

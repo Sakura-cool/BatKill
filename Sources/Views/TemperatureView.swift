@@ -227,12 +227,8 @@ struct TemperatureView: View {
 
     /// Summary of detected sensors and fans.
     private var statusText: String {
-        let tempCount = hardwareMonitor.temperatures.count
-        let fanCount = hardwareMonitor.fans.count
-        return lm.translate(
-            "\(tempCount) sensors · \(fanCount) fan(s)",
-            "\(tempCount) 传感器 · \(fanCount) 风扇"
-        )
+        lm.translate("\(hardwareMonitor.temperatures.count) sensors · \(hardwareMonitor.fans.count) fan(s)",
+                     "\(hardwareMonitor.temperatures.count) 传感器 · \(hardwareMonitor.fans.count) 风扇")
     }
 
     // MARK: - Unavailable
@@ -703,7 +699,7 @@ struct TemperatureView: View {
                 // Mode segmented picker: 自动 | 定速 | 调速.
                 Picker("", selection: Binding(
                     get: {
-                                        if !isManual { return 0 }
+                        if !isManual { return 0 }
                         return curveStore.subMode(for: fan.index) == .curve ? 2 : 1
                     },
                     set: { newValue in
@@ -779,11 +775,10 @@ struct TemperatureView: View {
     private func applyCurveSpeed(for fan: FanInfo) {
         if hardwareMonitor.fanControlEnabled {
             let target = curveStore.targetSpeed(for: fan.index,
-                                                fan: fan,
-                                                maxTemp: hardwareMonitor.maxCPUTemp)
+                                                fan: fan, maxTemp: hardwareMonitor.maxCPUTemp)
             fanTargetSpeeds[fan.index] = target
             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
-                fanWriteStatus[fan.index] = ok ? lm.translate("Set (Admin)", "已设定(管理员)") : lm.translate("Failed", "失败")
+                fanWriteStatus[fan.index] = fanWriteResult(ok)
             }
         } else {
             fanNeedsAdmin[fan.index] = true
@@ -806,7 +801,7 @@ struct TemperatureView: View {
         if hardwareMonitor.fanControlEnabled {
             fanTargetSpeeds[index] = speed
             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: index, speed: speed) { ok in
-                fanWriteStatus[index] = ok ? lm.translate("Set (Admin)", "已设定(管理员)") : lm.translate("Failed", "失败")
+                fanWriteStatus[index] = fanWriteResult(ok)
             }
         } else {
             fanNeedsAdmin[index] = true
@@ -817,6 +812,10 @@ struct TemperatureView: View {
     private func clearAllNeedsAdmin() {
         fanNeedsAdmin.removeAll()
         fanWriteStatus.removeAll()
+    }
+
+    private func fanWriteResult(_ ok: Bool) -> String {
+        ok ? lm.translate("Set (Admin)", "已设定(管理员)") : lm.translate("Failed", "失败")
     }
 
     private func authorizeFixedFan(for index: Int) {
@@ -858,8 +857,7 @@ struct TemperatureView: View {
     private func applyPreset(_ preset: FanPreset?) {
         guard let preset = preset else { return }
 
-        let needsAdmin = preset.fanAutoModes.values.contains(false)
-        if needsAdmin && !hardwareMonitor.fanControlEnabled {
+        if preset.fanAutoModes.values.contains(false) && !hardwareMonitor.fanControlEnabled {
             FanInstallManager.install { ok in
                 if ok { hardwareMonitor.refreshFanControlEnabled(); bringAppToFront(); executePreset(preset) }
             }

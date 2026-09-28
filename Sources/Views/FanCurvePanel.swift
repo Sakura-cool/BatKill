@@ -181,7 +181,7 @@ struct FanCurvePanel: View {
     private func scheduleApply() {
         applyTask?.cancel()
         applyTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            try? await Task.sleep(nanoseconds: fanApplyDebounceNs)
             guard !Task.isCancelled else { return }
             let curve = currentCurve
             let current = hardwareTemp()

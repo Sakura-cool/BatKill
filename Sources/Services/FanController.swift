@@ -157,6 +157,7 @@ extension HardwareMonitor {
     /// - Returns: Array of `FanInfo` structs, one per detected fan.
     func readFans() -> [FanInfo] {
         guard let countBytes = readBytes(key: "FNum"), let count = countBytes.first, count > 0 else {
+            logger("FanController: 读取 FNum 失败或风扇数为 0，返回空列表")
             return []
         }
 

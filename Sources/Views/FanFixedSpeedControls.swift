@@ -87,7 +87,7 @@ struct FanFixedSpeedControls: View {
     private func scheduleApply(_ value: Double) {
         debounceTask?.cancel()
         debounceTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            try? await Task.sleep(nanoseconds: fanApplyDebounceNs)
             guard !Task.isCancelled else { return }
             onSetSpeed(value)
         }
