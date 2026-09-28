@@ -321,7 +321,11 @@ final class HardwareMonitor: ObservableObject {
                     if let threshold { self.checkThreshold(threshold) }
                 }
             } else {
+                // Fans are published every tick (~1s), independent of the
+                // temperature sweep cycle, so RPM readouts stay live in every
+                // mode (auto/fixed/curve) — CHANGE-019 follow-up.
                 DispatchQueue.main.async {
+                    self.fans = freshFans
                     self.isRefreshing = false
                 }
             }
@@ -340,12 +344,13 @@ final class HardwareMonitor: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
 
+            let freshFans = self.readFans()
+
             guard let keys = HardwareMonitor.validTempKeysCache, !keys.isEmpty else {
                 let temps = self.readTemperatures()
-                let cachedFans = self.fans
                 DispatchQueue.main.async {
                     self.temperatures = temps
-                    self.fans = cachedFans
+                    self.fans = freshFans
                     self.isRefreshing = false
                 }
                 return
@@ -377,7 +382,6 @@ final class HardwareMonitor: ObservableObject {
                     .filter { $0.name.hasPrefix("CPU P-Core ") && !$0.name.contains("Aggregate") }
                     .map(\.temperature)
                 let maxTemp = pCoreTemps.max() ?? 0
-                let cachedFans = self.fans
                 let batch = self.cpuGpuAccumulator
 
                 self.cpuGpuAccumulator = []
@@ -385,7 +389,7 @@ final class HardwareMonitor: ObservableObject {
                 DispatchQueue.main.async {
                     let nonCpuGpu = self.temperatures.filter { $0.category != .cpu && $0.category != .gpu }
                     self.temperatures = batch + nonCpuGpu
-                    self.fans = cachedFans
+                    self.fans = freshFans
                     self.maxCPUTemp = maxTemp
                     self.updateSmoothedCPUTemp(maxTemp)
                     self.isRefreshing = false
@@ -393,6 +397,7 @@ final class HardwareMonitor: ObservableObject {
                 }
             } else {
                 DispatchQueue.main.async {
+                    self.fans = freshFans
                     self.isRefreshing = false
                 }
             }

@@ -64,5 +64,47 @@ final class FanInstallManagerTests: TestCase {
                 "refreshFanControlEnabled() 应重新同步安装状态"
             )
         }
+
+        runTest("sudoers 规则：两行 NOPASSWD，命令与参数限定正确") {
+            let rule = FanInstallManager.sudoersRule(for: "tester")
+            XCTAssertTrue(rule.hasSuffix("\n"), "规则必须以换行结尾（sudoers 逐行解析）")
+            XCTAssertFalse(rule.contains("^") || rule.contains("$"),
+                           "不得使用 ERE 锚点（macOS sudo 不支持 ERE 参数匹配，^[0-9]+$ 永不生效）")
+
+            let lines = rule.components(separatedBy: "\n").filter { !$0.isEmpty }
+            XCTAssertEqual(lines.count, 2, "应恰好两行：--set-fan 与 --set-fan-mode")
+
+            let setFanLine = lines[0]
+            XCTAssertTrue(
+                setFanLine.hasPrefix("tester ALL=(root) NOPASSWD: \(FanInstallManager.cliPath) --set-fan "),
+                "set-fan 行必须以 用户/NOPASSWD/CLI 路径 开头"
+            )
+            XCTAssertTrue(
+                setFanLine.hasSuffix("--set-fan [0-9]* [0-9]*"),
+                "set-fan 参数必须是 fnmatch 通配符 [0-9]* [0-9]*"
+            )
+
+            let setModeLine = lines[1]
+            XCTAssertTrue(
+                setModeLine.hasPrefix("tester ALL=(root) NOPASSWD: \(FanInstallManager.cliPath) --set-fan-mode "),
+                "set-fan-mode 行必须以 用户/NOPASSWD/CLI 路径 开头"
+            )
+            XCTAssertTrue(
+                setModeLine.hasSuffix("--set-fan-mode [0-9]* [01]"),
+                "set-fan-mode 参数必须是 [0-9]* [01]（模式仅 0/1）"
+            )
+        }
+
+        runTest("sudoers 规则：仅放行指定用户与指定命令，无通配") {
+            let rule = FanInstallManager.sudoersRule(for: "u_ser-1")
+            let lines = rule.components(separatedBy: "\n").filter { !$0.isEmpty }
+            XCTAssertEqual(lines.count, 2)
+            XCTAssertTrue(
+                lines.allSatisfy { $0.hasPrefix("u_ser-1 ALL=(root) NOPASSWD:") },
+                "每行必须精确放行指定用户"
+            )
+            XCTAssertFalse(rule.contains("ALL=(ALL)"), "不得放行任意用户")
+            XCTAssertFalse(rule.contains("NOPASSWD: ALL"), "不得放行任意命令")
+        }
     }
 }

@@ -237,9 +237,6 @@ extension HardwareMonitor {
 
     /// Sets a fan's target speed using admin privileges.
     /// Passes `--set-fan {index} {speed}` to the elevated binary.
-    ///
-    /// v0.1.6 FIX-002：校验风扇索引并做转速范围校验（收敛到该风扇的 [min, max]），
-    /// 非法数值（NaN/负数）直接拒绝，避免越界写入 SMC。
     func setFanSpeedWithAdmin(fanIndex: Int, speed: Double, completion: @escaping (Bool) -> Void) {
         guard speed.isFinite, speed >= 0 else {
             logger("FanController: 非法转速请求 \(speed)，写入被拒绝")
@@ -252,7 +249,7 @@ extension HardwareMonitor {
             completion(false)
             return
         }
-        let target = min(max(speed, fan.minSpeed), fan.maxSpeed)
+        let target = clampFanSpeed(speed, min: fan.minSpeed, max: fan.maxSpeed)
         if target != speed {
             logger("FanController: 转速 \(Int(speed)) 超出范围 "
                 + "[\(Int(fan.minSpeed)), \(Int(fan.maxSpeed))]，已收敛为 \(Int(target))")
@@ -324,4 +321,11 @@ extension HardwareMonitor {
         let trimmed = bytes.filter { $0 != 0 }
         return String(bytes: trimmed, encoding: .utf8)
     }
+}
+
+/// 将请求转速收敛到风扇的 [min, max] 区间，防止越界写入 SMC
+/// （v0.1.6 FIX-002：提权写入前的转速范围收敛）。
+/// 抽成纯函数以便单测直接覆盖收敛边界（CHANGE-019 测试补全）。
+func clampFanSpeed(_ speed: Double, min minSpeed: Double, max maxSpeed: Double) -> Double {
+    min(max(speed, minSpeed), maxSpeed)
 }

@@ -33,11 +33,11 @@ func handleCLIArgs() -> Bool {
     // Sets the fan to manual mode at the given RPM, then exits.
     // v0.1.6 FIX-002：提权入口收口——参数做白名单与范围校验，非法请求拒绝执行（exit 1）
     if args[1] == "--set-fan", args.count == 4 {
-        guard let fanIndex = Int(args[2]), fanIndex >= 0, maxFanIndex >= fanIndex else {
+        guard isValidFanCLIIndex(args[2]), let fanIndex = Int(args[2]) else {
             logger("CLIFanWriter: 非法风扇索引参数 \(args[2])，提权写入被拒绝")
             exit(1)
         }
-        guard let speed = Double(args[3]), speed.isFinite, speed >= 0, speed <= maxFanSpeedRPM else {
+        guard isValidFanCLISpeed(args[3]), let speed = Double(args[3]) else {
             logger("CLIFanWriter: 非法转速参数 \(args[3])（允许 0...\(Int(maxFanSpeedRPM))），提权写入被拒绝")
             exit(1)
         }
@@ -50,11 +50,11 @@ func handleCLIArgs() -> Bool {
     // --set-fan-mode <fanIndex> <0|1>
     // 0 = automatic, 1 = manual. Then exits.
     if args[1] == "--set-fan-mode", args.count == 4 {
-        guard let fanIndex = Int(args[2]), fanIndex >= 0, maxFanIndex >= fanIndex else {
+        guard isValidFanCLIIndex(args[2]), let fanIndex = Int(args[2]) else {
             logger("CLIFanWriter: 非法风扇索引参数 \(args[2])，提权写入被拒绝")
             exit(1)
         }
-        guard let mode = Int(args[3]), mode == 0 || mode == 1 else {
+        guard isValidFanCLIMode(args[3]), let mode = Int(args[3]) else {
             logger("CLIFanWriter: 非法模式参数 \(args[3])（允许 0/1），提权写入被拒绝")
             exit(1)
         }
@@ -66,7 +66,7 @@ func handleCLIArgs() -> Bool {
     // --get-fan <fanIndex>
     // Prints the fan's current speed (RPM) to stdout. Reads don't need root.
     if args[1] == "--get-fan", args.count == 3 {
-        guard let fanIndex = Int(args[2]), fanIndex >= 0, maxFanIndex >= fanIndex else {
+        guard isValidFanCLIIndex(args[2]), let fanIndex = Int(args[2]) else {
             fputs("batkill-fan: 非法风扇索引参数 \(args[2])\n", stderr)
             exit(1)
         }
@@ -90,3 +90,21 @@ private let maxFanIndex = 15
 
 /// 提权入口允许的最大转速（RPM）；真实上界由各风扇的 `F{i}Mx` 决定。
 private let maxFanSpeedRPM: Double = 20000
+
+/// 校验提权 CLI 的风扇索引参数：十进制整数且落在 0...maxFanIndex。
+/// 抽成纯函数以便单元测试直接覆盖提权入口收口（FIX-002 / CHANGE-019）。
+func isValidFanCLIIndex(_ raw: String) -> Bool {
+    guard let index = Int(raw) else { return false }
+    return index >= 0 && index <= maxFanIndex
+}
+
+/// 校验提权 CLI 的转速参数：有限数值、非负且不超 maxFanSpeedRPM。
+func isValidFanCLISpeed(_ raw: String) -> Bool {
+    guard let speed = Double(raw), speed.isFinite else { return false }
+    return speed >= 0 && speed <= maxFanSpeedRPM
+}
+
+/// 校验提权 CLI 的模式参数：仅允许 0（自动）/ 1（手动）。
+func isValidFanCLIMode(_ raw: String) -> Bool {
+    raw == "0" || raw == "1"
+}

@@ -50,6 +50,18 @@ enum FanInstallManager {
         }
     }
 
+    /// Generates the sudoers rule text for the given user: two NOPASSWD
+    /// lines scoped to the exact CLI path with fnmatch argument wildcards
+    /// (macOS sudo lacks POSIX ERE argument matching, so `^[0-9]+$` would
+    /// be treated literally and never match; `[0-9]*` / `[01]` are baseline
+    /// glob features). One line per command, each ending in a newline.
+    /// Extracted as a pure function so the security-critical rule shape is
+    /// unit-testable (CHANGE-019).
+    static func sudoersRule(for user: String) -> String {
+        "\(user) ALL=(root) NOPASSWD: \(cliPath) --set-fan [0-9]* [0-9]*\n"
+            + "\(user) ALL=(root) NOPASSWD: \(cliPath) --set-fan-mode [0-9]* [01]\n"
+    }
+
     /// One-time install: copies the CLI and writes the sudoers rule using a
     /// single `osascript … with administrator privileges` prompt.
     ///
@@ -64,11 +76,7 @@ enum FanInstallManager {
         }
 
         let user = NSUserName()
-        // fnmatch wildcards (not ERE): macOS's sudo is not compiled with
-        // POSIX ERE argument support, so `^[0-9]+$` is treated literally
-        // and never matches. `[0-9]*` / `[01]` are baseline glob features.
-        let rule = "\(user) ALL=(root) NOPASSWD: \(cliPath) --set-fan [0-9]* [0-9]*\n"
-            + "\(user) ALL=(root) NOPASSWD: \(cliPath) --set-fan-mode [0-9]* [01]\n"
+        let rule = sudoersRule(for: user)
         guard let ruleData = rule.data(using: .utf8) else {
             logger("FanInstall: 规则编码失败")
             completion(false)

@@ -90,5 +90,14 @@ final class FanControllerTests: TestCase {
             XCTAssertFalse(HardwareMonitor.adminExecBlocked, "显式重试应清除锁存")
             XCTAssertEqual(HardwareMonitor.adminExecBlockedAt, 0, "锁存时间应清零")
         }
+
+        runTest("转速收敛：低于下限取下限，高于上限取上限，区间内保持不变") {
+            XCTAssertEqual(clampFanSpeed(100, min: 500, max: 1200), 500, "低于 min 收敛到 min")
+            XCTAssertEqual(clampFanSpeed(500, min: 500, max: 1200), 500, "等于 min 保持")
+            XCTAssertEqual(clampFanSpeed(800, min: 500, max: 1200), 800, "区间内保持")
+            XCTAssertEqual(clampFanSpeed(1200, min: 500, max: 1200), 1200, "等于 max 保持")
+            XCTAssertEqual(clampFanSpeed(5000, min: 500, max: 1200), 1200, "高于 max 收敛到 max")
+            XCTAssertEqual(clampFanSpeed(0, min: 0, max: 0), 0, "零区间")
+        }
     }
 }
