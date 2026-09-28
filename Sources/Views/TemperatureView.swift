@@ -605,23 +605,9 @@ struct TemperatureView: View {
         .padding(12)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
-        // Save Preset alert -- prompts for a name
-        .alert(lm.translate("Save Preset", "保存预设"), isPresented: $showingSaveAlert) {
-            TextField(lm.translate("Preset name", "预设名称"), text: $newPresetName)
-            Button(lm.translate("Save", "保存")) {
-                if !newPresetName.isEmpty { saveCurrentAsPreset() }
-            }
-            Button(lm.translate("Cancel", "取消"), role: .cancel) { newPresetName = "" }
-        } message: {
-            let info = hardwareMonitor.fans.map { fan -> String in
-                let isAuto = !(fanManualModes[fan.index] ?? false)
-                if isAuto {
-                    return "\(fan.name): \(lm.translate("Auto", "自动"))"
-                }
-                let speed = Int(fanPendingSpeeds[fan.index] ?? fan.currentSpeed)
-                return "\(fan.name): \(speed) RPM"
-            }.joined(separator: "\n")
-            Text(info + "\n\n" + lm.translate("Enter a name for this preset", "为此预设输入名称"))
+        // Save Preset sheet -- compact preview with mode + curve thumbnail
+        .sheet(isPresented: $showingSaveAlert) {
+            savePresetSheet
         }
         // Delete Preset confirmation alert
         .alert(lm.translate("Delete Preset", "删除预设"), isPresented: Binding(
@@ -696,8 +682,7 @@ struct TemperatureView: View {
                 // temperature curve (验收反馈 v3: merged into the manual key).
                 Picker("", selection: Binding(
                     get: {
-                        // 0 = auto, 1 = fixed manual, 2 = curve manual
-                        if !isManual { return 0 }
+                                        if !isManual { return 0 }
                         return curveStore.subMode(for: fan.index) == .curve ? 2 : 1
                     },
                     set: { newValue in
@@ -746,18 +731,14 @@ struct TemperatureView: View {
                                   needsAdmin: fanNeedsAdmin[fan.index] == true,
                                   onAuthorize: { self.authorizeCurveFan(for: fan) })
                 } else {
-                FanFixedSpeedControls(
-                    fan: fan,
-                    lm: lm,
-                    hardwareMonitor: hardwareMonitor,
-                    pendingSpeed: Binding(
-                        get: { fanPendingSpeeds[fan.index] ?? fan.currentSpeed },
-                        set: { fanPendingSpeeds[fan.index] = $0 }
-                    ),
-                    statusMessage: fanWriteStatus[fan.index],
-                    needsAdmin: fanNeedsAdmin[fan.index] == true,
-                    onSetSpeed: { speed in self.writeFixedSpeed(speed, for: fan.index) },
-                    onAuthorize: { self.authorizeFixedFan(for: fan.index) })
+                FanFixedSpeedControls(fan: fan, lm: lm, hardwareMonitor: hardwareMonitor,
+                                     pendingSpeed: Binding(
+                                         get: { fanPendingSpeeds[fan.index] ?? fan.currentSpeed },
+                                         set: { fanPendingSpeeds[fan.index] = $0 }),
+                                     statusMessage: fanWriteStatus[fan.index],
+                                     needsAdmin: fanNeedsAdmin[fan.index] == true,
+                                     onSetSpeed: { s in self.writeFixedSpeed(s, for: fan.index) },
+                                     onAuthorize: { self.authorizeFixedFan(for: fan.index) })
                 }
             }
         }
@@ -904,6 +885,37 @@ struct TemperatureView: View {
 
     /// Captures the current fan speeds and modes into a new preset with
     /// the user-entered name, saves it to the store, and activates it.
+    /// Compact save-preset dialog previewing each fan's mode (auto/fixed/
+    /// curve) with fixed speeds and curve thumbnails (v0.2.0 CHANGE-014).
+    private var savePresetSheet: some View {
+        var subModes: [Int: ManualSubMode] = [:]
+        var curves: [Int: FanCurve] = [:]
+        var autoModes: [Int: Bool] = [:]
+        for fan in hardwareMonitor.fans {
+            let mode = curveStore.subMode(for: fan.index)
+            subModes[fan.index] = mode
+            autoModes[fan.index] = !(fanManualModes[fan.index] ?? false)
+            if mode == .curve {
+                curves[fan.index] = curveStore.curve(for: fan.index,
+                                                     minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
+            }
+        }
+        return SavePresetSheet(
+            fans: hardwareMonitor.fans,
+            autoModes: autoModes,
+            subModes: subModes,
+            pendingSpeeds: fanPendingSpeeds,
+            curves: curves,
+            lm: lm,
+            onSave: { name in
+                newPresetName = name
+                saveCurrentAsPreset()
+                showingSaveAlert = false
+            },
+            onCancel: { newPresetName = ""; showingSaveAlert = false }
+        )
+    }
+
     private func saveCurrentAsPreset() {
         var speeds: [Int: Double] = [:]
         var autoModes: [Int: Bool] = [:]
@@ -957,9 +969,6 @@ struct TemperatureView: View {
             } else {
                 hardwareMonitor.partialRefreshCPUAndGPU(threshold: thresholdStore.threshold)
             }
-            // v0.2.0: keep the curve panel's temperature marker fresh, then
-            // drive temperature-curve fans after each refresh (only with
-            // admin authorization so the curve can write speeds).
             curveStore?.lastReadCPUTemp = hardwareMonitor.maxCPUTemp
             if let curveStore, hardwareMonitor.isAdminAuthorized {
                 for fan in hardwareMonitor.fans where curveStore.subMode(for: fan.index) == .curve {
@@ -970,30 +979,4 @@ struct TemperatureView: View {
         timer.tolerance = tick * 0.1
         return timer
     }
-}
-
-// MARK: - Battery-Aware Refresh Interval
-
-/// Returns the hardware sensor refresh interval based on the current
-/// architecture and power source. Polls less frequently on battery
-/// to reduce SMC/IOKit overhead.
-///
-/// Per-tick interval for staggered SMC reads. Each tick reads ONE sensor
-/// key. With ~15-20 keys, a full refresh cycle takes interval × keyCount
-/// seconds (~6-8s on AC, ~10-14s on battery).
-///
-/// |              | Apple Silicon | Intel x86_64 |
-/// |--------------|--------------|--------------|
-/// | AC Power     |  1.0s        |  1.2s        |
-/// | Battery      |  2.0s        |  2.5s        |
-func hardwareRefreshInterval(onBattery: Bool) -> TimeInterval {
-    #if arch(x86_64)
-    return onBattery ? 2.5 : 1.2
-    #else
-    return onBattery ? 2.0 : 1.0
-    #endif
-}
-
-func batteryPollInterval(onBattery: Bool) -> TimeInterval {
-    onBattery ? 15.0 : 5.0
 }
