@@ -139,6 +139,8 @@ extension HardwareMonitor {
             HardwareMonitor.authRef = ref
             isAdminAuthorized = true
             HardwareMonitor.authDenied = false
+            // Fresh authorization grants a retry of the exec channel.
+            HardwareMonitor.retryAdminExec()
             ctx.complete(success: true)
         } else {
             AuthorizationFree(ref, [.destroyRights])
@@ -199,6 +201,12 @@ extension HardwareMonitor {
 
             guard status == errAuthorizationSuccess else {
                 logger("FanController: 提权执行失败（OSStatus \(status)）")
+                // Latch the failure so automatic/timer writes stop hammering
+                // the broken channel; only explicit user retries may re-arm.
+                if status == -60006 {  // errAuthorizationDenied on macOS 27
+                    HardwareMonitor.adminExecBlocked = true
+                    HardwareMonitor.adminExecBlockedAt = Date().timeIntervalSinceReferenceDate
+                }
                 self?.refresh()
                 DispatchQueue.main.async { completion(false) }
                 return

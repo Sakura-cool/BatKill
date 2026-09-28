@@ -148,6 +148,23 @@ final class HardwareMonitor: ObservableObject {
     /// than one auth dialog simultaneously. Reset after the dialog completes.
     static var authInProgress = false
 
+    /// Latch: privileged exec channel failed (deprecated
+    /// `AuthorizationExecuteWithPrivileges` errors on current macOS). While
+    /// set, automatic writes are skipped to avoid hammering every tick.
+    static var adminExecBlocked = false
+
+    /// Reference-date seconds of last exec failure, for retry backoff.
+    static var adminExecBlockedAt: TimeInterval = 0
+
+    /// Seconds before automatic writes may retry a failed privileged channel.
+    static let adminExecBackoff: TimeInterval = 30
+
+    /// Clears the blocked latch; called before explicit user retries.
+    static func retryAdminExec() {
+        adminExecBlocked = false
+        adminExecBlockedAt = 0
+    }
+
     /// Resets the denied state so the next `requestAdminAuth()` call will
     /// actually show the auth dialog. Call this ONLY before explicit user
     /// actions (button taps), NOT before automatic/derived calls.

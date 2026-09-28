@@ -332,6 +332,13 @@ final class FanCurveStore: ObservableObject {
     /// Called by the TemperatureView refresh timer each tick.
     func driveFan(fan: FanInfo, hardwareMonitor: HardwareMonitor) {
         guard !hardwareMonitor.thermalThrottled else { return }
+        // Skip automatic writes while the privileged channel is in backoff
+        // (broken on macOS 27): retry only after the window elapses.
+        if HardwareMonitor.adminExecBlocked,
+           Date().timeIntervalSinceReferenceDate - HardwareMonitor.adminExecBlockedAt
+                < HardwareMonitor.adminExecBackoff {
+            return
+        }
         let temp = hardwareMonitor.maxCPUTemp
         guard subMode(for: fan.index) == .curve else { return }
         let curve = curve(for: fan.index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)

@@ -770,6 +770,10 @@ struct TemperatureView: View {
     }
 
     private func authorizeCurveFan(for fan: FanInfo) {
+        if HardwareMonitor.adminExecBlocked {
+            fanWriteStatus[fan.index] = lm.translate("Admin channel unavailable", "提权通道不可用")
+            return
+        }
         HardwareMonitor.resetAuthDenied()
         if hardwareMonitor.requestAdminAuth() {
             bringAppToFront()
@@ -799,6 +803,10 @@ struct TemperatureView: View {
     }
 
     private func authorizeFixedFan(for index: Int) {
+        if HardwareMonitor.adminExecBlocked {
+            fanWriteStatus[index] = lm.translate("Admin channel unavailable", "提权通道不可用")
+            return
+        }
         HardwareMonitor.resetAuthDenied()
         if hardwareMonitor.requestAdminAuth() {
             bringAppToFront()
@@ -845,6 +853,10 @@ struct TemperatureView: View {
 
         let needsAdmin = preset.fanAutoModes.values.contains(false)
         if needsAdmin && !hardwareMonitor.isAdminAuthorized {
+            if HardwareMonitor.adminExecBlocked {
+                fanWriteStatus = [:]
+                return
+            }
             // User explicitly tapped a preset — reset denied flag so the
             // auth dialog appears when they're ready to try again.
             HardwareMonitor.resetAuthDenied()
