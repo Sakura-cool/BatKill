@@ -740,14 +740,11 @@ struct TemperatureView: View {
 
             if isManual && !hardwareMonitor.thermalThrottled {
                 if curveStore.subMode(for: fan.index) == .curve {
-                    FanCurvePanel(
-                        fan: fan,
-                        curveStore: curveStore,
-                        lm: lm,
-                        onApplySpeed: { _ in self.applyCurveSpeed(for: fan) },
-                        statusMessage: fanWriteStatus[fan.index],
-                        needsAdmin: fanNeedsAdmin[fan.index] == true,
-                        onAuthorize: { self.authorizeCurveFan(for: fan) })
+                    FanCurvePanel(fan: fan, curveStore: curveStore, lm: lm,
+                                  onApplySpeed: { _ in self.applyCurveSpeed(for: fan) },
+                                  statusMessage: fanWriteStatus[fan.index],
+                                  needsAdmin: fanNeedsAdmin[fan.index] == true,
+                                  onAuthorize: { self.authorizeCurveFan(for: fan) })
                 } else {
                 FanFixedSpeedControls(
                     fan: fan,
@@ -759,11 +756,8 @@ struct TemperatureView: View {
                     ),
                     statusMessage: fanWriteStatus[fan.index],
                     needsAdmin: fanNeedsAdmin[fan.index] == true,
-                    onSetSpeed: { speed in
-                        self.writeFixedSpeed(speed, for: fan.index)
-                    },
-                    onAuthorize: { self.authorizeFixedFan(for: fan.index) }
-                )
+                    onSetSpeed: { speed in self.writeFixedSpeed(speed, for: fan.index) },
+                    onAuthorize: { self.authorizeFixedFan(for: fan.index) })
                 }
             }
         }
@@ -798,7 +792,7 @@ struct TemperatureView: View {
         HardwareMonitor.resetAuthDenied()
         if hardwareMonitor.requestAdminAuth() {
             bringAppToFront()
-            fanNeedsAdmin[fan.index] = nil
+            clearAllNeedsAdmin()
             applyCurveSpeed(for: fan)
         } else {
             fanWriteStatus[fan.index] = lm.translate("Auth Denied", "授权被拒绝")
@@ -817,11 +811,17 @@ struct TemperatureView: View {
         }
     }
 
+    /// One successful auth clears the flag for every fan (no repeat prompts).
+    private func clearAllNeedsAdmin() {
+        fanNeedsAdmin.removeAll()
+        fanWriteStatus.removeAll()
+    }
+
     private func authorizeFixedFan(for index: Int) {
         HardwareMonitor.resetAuthDenied()
         if hardwareMonitor.requestAdminAuth() {
             bringAppToFront()
-            fanNeedsAdmin[index] = nil
+            clearAllNeedsAdmin()
             let speed = fanPendingSpeeds[index] ?? 0
             writeFixedSpeed(speed, for: index)
         } else {
