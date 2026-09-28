@@ -275,12 +275,14 @@ final class HardwareMonitor: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
 
+            // Refresh fan speeds every tick (~1s) so the
+            // temperature view's RPM readout stays live.
+            let freshFans = self.readFans()
             guard let keys = HardwareMonitor.validTempKeysCache, !keys.isEmpty else {
                 let temps = self.readTemperatures()
-                let cachedFans = self.fans
                 DispatchQueue.main.async {
                     self.temperatures = temps
-                    self.fans = cachedFans
+                    self.fans = freshFans
                     self.isRefreshing = false
                 }
                 return
@@ -306,14 +308,13 @@ final class HardwareMonitor: ObservableObject {
                     .filter { $0.name.hasPrefix("CPU P-Core ") && !$0.name.contains("Aggregate") }
                     .map(\.temperature)
                 let maxTemp = pCoreTemps.max() ?? 0
-                let cachedFans = self.fans
                 let batch = self.tempAccumulator
 
                 self.tempAccumulator = []
 
                 DispatchQueue.main.async {
                     self.temperatures = batch
-                    self.fans = cachedFans
+                    self.fans = freshFans
                     self.maxCPUTemp = maxTemp
                     self.updateSmoothedCPUTemp(maxTemp)
                     self.isRefreshing = false
