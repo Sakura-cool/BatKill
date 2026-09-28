@@ -447,7 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Attempts to set fan to manual mode at 50% max speed. Logs success
-    /// or failure. Admin auth dialog may appear.
+    /// or failure. Requires the batkill-fan sudo channel (CHANGE-019).
     private func setFanForDiagnose() {
         guard !hardwareMonitor.fans.isEmpty else {
             logger("=== DIAGNOSE: No fans found, skipping fan adjustment ===")
@@ -455,7 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         logger("=== DIAGNOSE: Setting fan speed... ===")
-        if hardwareMonitor.requestAdminAuth() {
+        if FanInstallManager.isSudoReady() {
             for fan in hardwareMonitor.fans {
                 let speed = fan.maxSpeed * 0.5
                 hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
@@ -471,7 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self?.startCPULogging(phase: "after-fan")
             }
         } else {
-            logger("=== DIAGNOSE: Admin auth denied or failed ===")
+            logger("=== DIAGNOSE: sudo 通道未就绪，跳过风扇调整 ===")
         }
     }
 

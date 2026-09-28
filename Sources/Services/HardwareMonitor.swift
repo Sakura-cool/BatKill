@@ -58,9 +58,6 @@ final class HardwareMonitor: ObservableObject {
     /// Used by views to reduce polling frequency on battery.
     @Published var isRunningOnBattery = false
 
-    /// Whether admin authorization has been granted for SMC writes.
-    @Published var isAdminAuthorized = false
-
     /// Whether the batkill-fan sudo channel is installed and ready
     /// (CHANGE-019). Drives the fan-control UI gate.
     @Published var fanControlEnabled = FanInstallManager.isInstalled()
@@ -144,47 +141,10 @@ final class HardwareMonitor: ObservableObject {
     /// adds each sensor here. At cycle end, the full batch is published.
     private var cpuGpuAccumulator: [TemperatureSensor] = []
 
-    /// Static reference to the authorization object for admin SMC writes.
-    /// Persists for the lifetime of the process once granted.
-    static var authRef: AuthorizationRef?
-
-    /// Whether the user explicitly denied (or cancelled) the admin auth dialog.
-    /// When `true`, `requestAdminAuth()` returns `false` without showing the
-    /// dialog. Reset by `resetAuthDenied()` before explicit user-initiated retries.
-    static var authDenied = false
-
-    /// Whether an auth request is currently in flight. Prevents showing more
-    /// than one auth dialog simultaneously. Reset after the dialog completes.
-    static var authInProgress = false
-
-    /// Serial queue serializing privileged exec (AuthorizationExecuteWith
-    /// Privileges) calls. Guarantees only ONE dialog/write in flight at a
-    /// time — concurrent per-fan timer writes can't stack multiple dialogs.
+    /// Serial queue serializing privileged exec (sudo batkill-fan) calls.
+    /// Guarantees only ONE write in flight at a time — concurrent per-fan
+    /// timer writes can't stack up (CHANGE-016/019).
     static let adminAuthQueue = DispatchQueue(label: "com.batkill.admin-auth", qos: .userInitiated)
-
-    /// Latch: privileged exec channel failed (deprecated
-    /// `AuthorizationExecuteWithPrivileges` errors on current macOS). While
-    /// set, automatic writes are skipped to avoid hammering every tick.
-    static var adminExecBlocked = false
-
-    /// Reference-date seconds of last exec failure, for retry backoff.
-    static var adminExecBlockedAt: TimeInterval = 0
-
-    /// Seconds before automatic writes may retry a failed privileged channel.
-    static let adminExecBackoff: TimeInterval = 30
-
-    /// Clears the blocked latch; called before explicit user retries.
-    static func retryAdminExec() {
-        adminExecBlocked = false
-        adminExecBlockedAt = 0
-    }
-
-    /// Resets the denied state so the next `requestAdminAuth()` call will
-    /// actually show the auth dialog. Call this ONLY before explicit user
-    /// actions (button taps), NOT before automatic/derived calls.
-    static func resetAuthDenied() {
-        authDenied = false
-    }
 
     // MARK: Singleton
 

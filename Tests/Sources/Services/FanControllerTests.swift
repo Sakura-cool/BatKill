@@ -2,8 +2,8 @@
 //  BatKill Tests
 //
 //  Tests for the CHANGE-019 sudo fan-write channel guards:
-//  invalid requests and the blocked latch are rejected synchronously
-//  WITHOUT spawning a privileged process (no sudo, no SMC write).
+//  invalid requests are rejected synchronously WITHOUT spawning a
+//  privileged process (no sudo, no SMC write).
 
 import Foundation
 
@@ -59,36 +59,6 @@ final class FanControllerTests: TestCase {
             }
             XCTAssertTrue(called, "非法风扇索引必须同步回调")
             XCTAssertFalse(result, "非法风扇索引的模式切换必须拒绝")
-        }
-
-        runTest("提权通道锁存后 runWithAdmin 同步拒绝，不拉起 sudo") {
-            let monitor = HardwareMonitor()
-            // Save latch state and force blocked (restored even on failure).
-            let wasBlocked = HardwareMonitor.adminExecBlocked
-            let wasBlockedAt = HardwareMonitor.adminExecBlockedAt
-            HardwareMonitor.adminExecBlocked = true
-            HardwareMonitor.adminExecBlockedAt = Date().timeIntervalSinceReferenceDate
-            defer {
-                HardwareMonitor.adminExecBlocked = wasBlocked
-                HardwareMonitor.adminExecBlockedAt = wasBlockedAt
-            }
-
-            var result = false
-            var called = false
-            monitor.runWithAdmin(args: ["--set-fan", "0", "100"]) {
-                result = $0
-                called = true
-            }
-            XCTAssertTrue(called, "锁存期间必须同步回调")
-            XCTAssertFalse(result, "锁存期间写入必须拒绝（不得拉起 sudo）")
-        }
-
-        runTest("retryAdminExec() 清除锁存，允许显式重试") {
-            HardwareMonitor.adminExecBlocked = true
-            HardwareMonitor.adminExecBlockedAt = Date().timeIntervalSinceReferenceDate
-            HardwareMonitor.retryAdminExec()
-            XCTAssertFalse(HardwareMonitor.adminExecBlocked, "显式重试应清除锁存")
-            XCTAssertEqual(HardwareMonitor.adminExecBlockedAt, 0, "锁存时间应清零")
         }
 
         runTest("转速收敛：低于下限取下限，高于上限取上限，区间内保持不变") {

@@ -70,118 +70,12 @@ extension HardwareMonitor {
         }
     }
 
-    // MARK: - Admin Authorization
-
-    /// Requests one-time administrator authorization via the macOS
-    /// AuthorizationServices framework.
-    ///
-    /// Authorization lifecycle (three states, single-instance):
-    ///   1. **Authorized** (`authRef != nil`) → immediately returns `true`
-    ///   2. **Denied** (`authDenied == true`) → returns `false` without dialog
-    ///   3. **In flight** (`authInProgress == true`) → returns `false` without dialog
-    ///
-    /// The denied state is reset by `HardwareMonitor.resetAuthDenied()` which
-    /// callers MUST invoke before explicit user-initiated retries (button taps).
-    /// Automatic/derived callers must NOT reset — they should respect the denial.
-    ///
-    /// - Returns: `true` if authorization was granted.
-    func requestAdminAuth() -> Bool {
-        let ctx = LogContext(name: "requestAdminAuth")
-
-        // ── 1. Already authorized → reuse ──
-        if HardwareMonitor.authRef != nil {
-            isAdminAuthorized = true
-            HardwareMonitor.authDenied = false
-            ctx.complete(success: true, extra: "复用现有授权")
-            return true
-        }
-
-        // ── 2. Single in-flight guard: only one dialog may be shown at a
-        // time. Set immediately after the reuse check so concurrent callers
-        // (multiple fans' authorize buttons) are rejected before any dialog.
-        guard !HardwareMonitor.authInProgress else {
-            ctx.log("授权弹窗已存在，跳过")
-            return false
-        }
-        HardwareMonitor.authInProgress = true
-        defer {
-            // The synchronous AuthorizationCopyRights below blocks until the
-            // user interacts, so inProgress is always reset right after.
-            HardwareMonitor.authInProgress = false
-        }
-
-        // ── 3. Previously denied → honour user's choice, no dialog ──
-        guard !HardwareMonitor.authDenied else {
-            ctx.log("用户此前拒绝了授权，跳过弹窗")
-            return false
-        }
-
-        // ── 4. Show the system auth dialog ──
-        var ref: AuthorizationRef?
-        guard AuthorizationCreate(nil, nil, [], &ref) == errAuthorizationSuccess,
-              let ref = ref else {
-            ctx.fail("创建授权引用失败")
-            HardwareMonitor.authDenied = true
-            return false
-        }
-
-        let rightName = kAuthorizationRightExecute
-        let ok = rightName.withCString { cName in
-            var item = AuthorizationItem(name: cName, valueLength: 0, value: nil, flags: 0)
-            return withUnsafeMutablePointer(to: &item) { itemPtr in
-                var rights = AuthorizationRights(count: 1, items: itemPtr)
-                let flags: AuthorizationFlags = [.interactionAllowed, .extendRights]
-                return AuthorizationCopyRights(ref, &rights, nil, flags, nil) == errAuthorizationSuccess
-            }
-        }
-
-        if ok {
-            HardwareMonitor.authRef = ref
-            isAdminAuthorized = true
-            HardwareMonitor.authDenied = false
-            ctx.complete(success: true)
-        } else {
-            AuthorizationFree(ref, [.destroyRights])
-            HardwareMonitor.authDenied = true
-            ctx.fail("授权被拒绝或取消")
-        }
-        return ok
-    }
-
-    /// Executes the app's own binary with elevated privileges, passing
-    /// the given command-line arguments. Uses `AuthorizationExecuteWithPrivileges`
-    /// (deprecated API loaded via `dlsym` since it's not in Swift headers).
-    ///
-    /// Runs asynchronously on a background queue; calls `completion` on main
-    /// thread after the privileged process exits and a data refresh completes.
-    ///
-    /// - Parameters:
-    ///   - args: Command-line arguments to pass to the binary.
-    ///   - completion: Called on the main thread with `true` when done.
-    /// Cached function pointer for `AuthorizationExecuteWithPrivileges`,
-    /// loaded once via `dlopen`/`dlsym` on first use. The Security framework
-    /// handle is kept alive for the lifetime of the process (no `dlclose`).
-    private typealias AuthExecFunc = @convention(c) (
-        AuthorizationRef, UnsafePointer<CChar>, AuthorizationFlags,
-        UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-        ((UnsafeMutableRawPointer?) -> Void)?
-    ) -> OSStatus
-
-    private static let authExecFunc: AuthExecFunc? = {
-        let handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_NOW)
-        guard let sym = dlsym(handle, "AuthorizationExecuteWithPrivileges") else { return nil }
-        return unsafeBitCast(sym, to: AuthExecFunc.self)
-    }()
+    // MARK: - Admin Write Channel (sudo)
 
     func runWithAdmin(args: [String], completion: @escaping (Bool) -> Void) {
-        // Hard-stop once the channel is latched blocked. The sudo channel is
-        // stable (no per-call dialog), but a failure latch still prevents
-        // hammering when the tool/sudoers rule is missing (CHANGE-019).
-        guard !HardwareMonitor.adminExecBlocked else {
-            logger("FanController: 提权通道已锁存，写入被跳过")
-            completion(false)
-            return
-        }
+        // The sudo channel is stable (no per-call dialog); just verify the
+        // tool + rule are installed. A transient failure is retried on the
+        // next timer tick rather than latched (CHANGE-019).
         guard FanInstallManager.isSudoReady() else {
             logger("FanController: sudo 通道未就绪（未安装 batkill-fan 或 sudoers 规则），写入被拒绝")
             completion(false)
@@ -200,11 +94,6 @@ extension HardwareMonitor {
                 let ok = proc.terminationStatus == 0
                 if !ok {
                     logger("FanController: sudo batkill-fan 失败（exit \(proc.terminationStatus)）")
-                    // Latch on repeated failure so timers don't spam.
-                    if HardwareMonitor.adminExecBlockedAt == 0 {
-                        HardwareMonitor.adminExecBlocked = true
-                        HardwareMonitor.adminExecBlockedAt = Date().timeIntervalSinceReferenceDate
-                    }
                 }
                 self?.refresh()
                 DispatchQueue.main.async { completion(ok) }

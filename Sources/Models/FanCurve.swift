@@ -340,11 +340,6 @@ final class FanCurveStore: ObservableObject {
         // Only drive the curve when the sudo fan channel is installed; the
         // timer path never triggers the install prompt (CHANGE-019).
         guard hardwareMonitor.fanControlEnabled else { return }
-        // Permanently stop automatic writes while the privileged channel is
-        // blocked (broken on macOS 27). Only explicit user actions re-arm it
-        // via `retryAdminExec()` — otherwise the timer re-triggers the auth
-        // dialog every tick (CHANGE-015/016).
-        guard !HardwareMonitor.adminExecBlocked else { return }
         let temp = hardwareMonitor.maxCPUTemp
         guard subMode(for: fan.index) == .curve else { return }
         let curve = curve(for: fan.index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)

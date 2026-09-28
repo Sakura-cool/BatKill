@@ -634,7 +634,7 @@ struct TemperatureView: View {
 
     private var adminGateOverlay: some View {
         AdminGateOverlay(
-            authDenied: !hardwareMonitor.fanControlEnabled,
+            notEnabled: !hardwareMonitor.fanControlEnabled,
             lm: lm,
             onAuthorize: {
                 FanInstallManager.install { ok in

@@ -9,7 +9,7 @@ import SwiftUI
 
 /// Blurred gate over the fan sections, with a centered authorize button.
 struct AdminGateOverlay: View {
-    let authDenied: Bool
+    let notEnabled: Bool
     let lm: LocalizationManager
     let onAuthorize: () -> Void
 
@@ -31,7 +31,7 @@ struct AdminGateOverlay: View {
                 .controlSize(.large)
                 .tint(.blue)
 
-                if authDenied {
+                if notEnabled {
                     Text(lm.translate("Fan control requires a one-time admin authorization",
                                       "风扇控制需要一次性管理员授权"))
                         .font(.caption2)
