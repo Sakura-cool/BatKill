@@ -109,8 +109,16 @@ struct TemperatureView: View {
                         }
                         temperatureGroups
                         if !hardwareMonitor.fans.isEmpty {
-                            presetSection
-                            fanSection
+                            ZStack {
+                                VStack(spacing: 12) {
+                                    presetSection
+                                    fanSection
+                                }
+                                .blur(radius: hardwareMonitor.isAdminAuthorized ? 0 : 8)
+                                if !hardwareMonitor.isAdminAuthorized {
+                                    adminGateOverlay
+                                }
+                            }
                         }
                     }
                     .padding()
@@ -197,7 +205,6 @@ struct TemperatureView: View {
             Image(systemName: "thermometer.medium")
                 .font(.system(size: 28))
                 .foregroundColor(.red)
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(lm.translate("Hardware Monitor", "硬件监控"))
                     .font(.title2).fontWeight(.semibold)
@@ -205,7 +212,6 @@ struct TemperatureView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
-
             Spacer()
 
             Button {
@@ -624,11 +630,24 @@ struct TemperatureView: View {
         }
     }
 
+    // MARK: - Admin Gate Overlay
+
+    private var adminGateOverlay: some View {
+        AdminGateOverlay(
+            authDenied: HardwareMonitor.authDenied,
+            lm: lm,
+            onAuthorize: {
+                HardwareMonitor.resetAuthDenied()
+                if hardwareMonitor.requestAdminAuth() {
+                    bringAppToFront()
+                    clearAllNeedsAdmin()
+                }
+            }
+        )
+    }
+
     // MARK: - Fan Section
 
-    /// Per-fan control section. Each fan gets an auto/manual segmented
-    /// picker, a speed slider (when in manual mode), and a "Set Speed"
-    /// button that writes to the SMC (requiring admin authorization).
     private var fanSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -659,8 +678,6 @@ struct TemperatureView: View {
         .cornerRadius(8)
     }
 
-    /// A single fan's control row with auto/manual picker, speed slider,
-    /// set button, and admin authorization flow.
     private func fanControlRow(_ fan: FanInfo) -> some View {
         let isManual = fanManualModes[fan.index] ?? false
 
@@ -701,16 +718,12 @@ struct TemperatureView: View {
                             // Switching to manual: initialize pending speed
                             fanPendingSpeeds[fan.index] = fan.currentSpeed
                             hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
-                                fanWriteStatus[fan.index] = ok
-                                    ? lm.translate("Manual mode set", "已设为手动")
-                                    : lm.translate("Failed", "失败")
+                                fanWriteStatus[fan.index] = ok ? lm.translate("Manual mode set", "已设为手动") : lm.translate("Failed", "失败")
                             }
                         } else {
                             // Switching to auto: restore system control
                             hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { ok in
-                                fanWriteStatus[fan.index] = ok
-                                    ? lm.translate("Auto mode restored", "已恢复自动")
-                                    : lm.translate("Failed", "失败")
+                                fanWriteStatus[fan.index] = ok ? lm.translate("Auto mode restored", "已恢复自动") : lm.translate("Failed", "失败")
                             }
                         }
                     }
@@ -760,9 +773,7 @@ struct TemperatureView: View {
                                                 fan: fan,
                                                 maxTemp: hardwareMonitor.maxCPUTemp)
             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
-                fanWriteStatus[fan.index] = ok
-                    ? lm.translate("Set (Admin)", "已设定(管理员)")
-                    : lm.translate("Failed", "失败")
+                fanWriteStatus[fan.index] = ok ? lm.translate("Set (Admin)", "已设定(管理员)") : lm.translate("Failed", "失败")
             }
         } else {
             fanNeedsAdmin[fan.index] = true
@@ -785,9 +796,7 @@ struct TemperatureView: View {
     private func writeFixedSpeed(_ speed: Double, for index: Int) {
         if hardwareMonitor.isAdminAuthorized {
             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: index, speed: speed) { ok in
-                fanWriteStatus[index] = ok
-                    ? lm.translate("Set (Admin)", "已设定(管理员)")
-                    : lm.translate("Failed", "失败")
+                fanWriteStatus[index] = ok ? lm.translate("Set (Admin)", "已设定(管理员)") : lm.translate("Failed", "失败")
             }
         } else {
             fanNeedsAdmin[index] = true
@@ -819,12 +828,8 @@ struct TemperatureView: View {
     /// current hardware values. Called on appear and on manual refresh.
     private func initFanStates() {
         for fan in hardwareMonitor.fans {
-            if fanManualModes[fan.index] == nil {
-                fanManualModes[fan.index] = !fan.isAutoMode
-            }
-            if fanPendingSpeeds[fan.index] == nil {
-                fanPendingSpeeds[fan.index] = fan.currentSpeed
-            }
+            if fanManualModes[fan.index] == nil { fanManualModes[fan.index] = !fan.isAutoMode }
+            if fanPendingSpeeds[fan.index] == nil { fanPendingSpeeds[fan.index] = fan.currentSpeed }
         }
     }
 
@@ -835,11 +840,8 @@ struct TemperatureView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             NSApp.activate()
             NSApp.arrangeInFront(nil)
-            if let window = NSApp.windows.first(where: { $0.title == "Temperature" && $0.isVisible }) {
-                window.makeKeyAndOrderFront(nil)
-            } else if let window = NSApp.windows.first(where: { $0.isVisible }) {
-                window.makeKeyAndOrderFront(nil)
-            }
+            (NSApp.windows.first(where: { $0.title == "Temperature" && $0.isVisible })
+                ?? NSApp.windows.first(where: { $0.isVisible }))?.makeKeyAndOrderFront(nil)
         }
     }
 
@@ -870,7 +872,6 @@ struct TemperatureView: View {
     /// Activates the preset in the store so it is remembered.
     private func executePreset(_ preset: FanPreset) {
         presetStore.activate(preset)
-
         curveStore.applyPresetSubModes(preset.fanManualSubModes,
                                       curves: preset.fanCurves)
         for (index, isAuto) in preset.fanAutoModes {
@@ -884,9 +885,7 @@ struct TemperatureView: View {
             fanPendingSpeeds[index] = speed
             if preset.fanAutoModes[index] != true {
                 hardwareMonitor.setFanSpeedWithAdmin(fanIndex: index, speed: speed) { [self] ok in
-                    fanWriteStatus[index] = ok
-                        ? lm.translate("Preset applied", "已应用预设")
-                        : lm.translate("Failed", "失败")
+                    fanWriteStatus[index] = ok ? lm.translate("Preset applied", "已应用预设") : lm.translate("Failed", "失败")
                 }
             }
         }
@@ -914,11 +913,7 @@ struct TemperatureView: View {
             autoModes: autoModes, subModes: subModes,
             pendingSpeeds: fanPendingSpeeds, curves: curves,
             lm: lm,
-            onSave: { name in
-                newPresetName = name
-                saveCurrentAsPreset()
-                showingSaveAlert = false
-            },
+            onSave: { name in newPresetName = name; saveCurrentAsPreset(); showingSaveAlert = false },
             onCancel: { newPresetName = ""; showingSaveAlert = false }
         )
     }
@@ -938,8 +933,7 @@ struct TemperatureView: View {
                 subModes[fan.index] = mode
                 if mode == .curve {
                     curves[fan.index] = curveStore.curve(for: fan.index,
-                                                         minSpeed: fan.minSpeed,
-                                                         maxSpeed: fan.maxSpeed)
+                                                         minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
                 }
             }
         }
@@ -959,8 +953,6 @@ struct TemperatureView: View {
         min(max((temp + 20) / 120.0, 0), 1.0)
     }
 
-    /// Returns a color indicating the severity of a temperature reading.
-    /// Green (< 50), Orange (50-70), Red (>= 70).
     private func tempColor(_ temp: Double) -> Color {
         if temp < 50 { return .green }
         if temp < 70 { return .orange }
