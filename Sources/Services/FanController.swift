@@ -139,8 +139,6 @@ extension HardwareMonitor {
             HardwareMonitor.authRef = ref
             isAdminAuthorized = true
             HardwareMonitor.authDenied = false
-            // Fresh authorization grants a retry of the exec channel.
-            HardwareMonitor.retryAdminExec()
             ctx.complete(success: true)
         } else {
             AuthorizationFree(ref, [.destroyRights])
