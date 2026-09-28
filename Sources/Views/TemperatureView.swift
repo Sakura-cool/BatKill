@@ -64,6 +64,10 @@ struct TemperatureView: View {
     /// Per-fan write status messages ("Set (Admin)", "Failed", etc.).
     @State private var fanWriteStatus: [Int: String] = [:]
 
+    /// Per-fan last-applied target speed (RPM), used to judge "已生效" when
+    /// the read-back converges to it within tolerance (CHANGE-022).
+    @State private var fanTargetSpeeds: [Int: Double] = [:]
+
     /// Per-fan flags indicating admin authorization is needed before writing.
     @State private var fanNeedsAdmin: [Int: Bool] = [:]
 
@@ -129,11 +133,9 @@ struct TemperatureView: View {
         .onAppear {
             // Initialize threshold input field
             thresholdInput = "\(Int(thresholdStore.threshold))"
-            // Fetch initial sensor data
             hardwareMonitor.refresh()
             // Ensure the built-in "Auto Mode" preset exists
             presetStore.ensureAutoPreset(fanCount: hardwareMonitor.fans.count)
-            // Initialize fan UI state from current hardware values
             initFanStates()
             // Apply the currently active preset — only if it does NOT require
             // admin auth. If it does, skip auto-execution so the auth dialog
@@ -145,7 +147,6 @@ struct TemperatureView: View {
                     executePreset(preset)
                 }
             }
-            // Set up thermal throttle callback to auto-release fans
             hardwareMonitor.onThermalThrottle = {
                 guard hardwareMonitor.fanControlEnabled else { return }
                 // Save current fan states so they can be restored on cooldown
@@ -161,7 +162,6 @@ struct TemperatureView: View {
                 presetStore.update(auto)
                 executePreset(auto)
             }
-            // Set up thermal cooldown callback to restore user settings
             hardwareMonitor.onThermalCooldown = {
                 guard hardwareMonitor.fanControlEnabled else { return }
                 guard !savedFanModes.isEmpty else { return }
@@ -693,12 +693,14 @@ struct TemperatureView: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.secondary)
 
+                FanStatusBadge(isManual: isManual,
+                                    target: fanTargetSpeeds[fan.index],
+                                    currentSpeed: fan.currentSpeed,
+                                    lm: lm)
+
                 Spacer()
 
                 // Mode segmented picker: 自动 | 定速 | 调速.
-                // The two manual sub-modes live inside the "manual" control:
-                // tapping 手动-class options switches between fixed speed and
-                // temperature curve (验收反馈 v3: merged into the manual key).
                 Picker("", selection: Binding(
                     get: {
                                         if !isManual { return 0 }
@@ -716,14 +718,19 @@ struct TemperatureView: View {
                         fanWriteStatus[fan.index] = nil
                         fanNeedsAdmin[fan.index] = nil
 
-                        if wantsManual {
-                            // Switching to manual: initialize pending speed
-                            fanPendingSpeeds[fan.index] = fan.currentSpeed
+                        // Apply the selected mode immediately (CHANGE-022):
+                        // fixed → write the current pending speed once;
+                        // curve → write the target for the current temp;
+                        // auto → hand control back to the system.
+                        switch newValue {
+                        case 2:
+                            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { _ in self.applyCurveSpeed(for: fan) }
+                        case 1:
                             hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
                                 fanWriteStatus[fan.index] = ok ? lm.translate("Manual mode set", "已设为手动") : lm.translate("Failed", "失败")
+                                if ok { let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed; self.writeFixedSpeed(speed, for: fan.index) }
                             }
-                        } else {
-                            // Switching to auto: restore system control
+                        default:
                             hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { ok in
                                 fanWriteStatus[fan.index] = ok ? lm.translate("Auto mode restored", "已恢复自动") : lm.translate("Failed", "失败")
                             }
@@ -774,6 +781,7 @@ struct TemperatureView: View {
             let target = curveStore.targetSpeed(for: fan.index,
                                                 fan: fan,
                                                 maxTemp: hardwareMonitor.maxCPUTemp)
+            fanTargetSpeeds[fan.index] = target
             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
                 fanWriteStatus[fan.index] = ok ? lm.translate("Set (Admin)", "已设定(管理员)") : lm.translate("Failed", "失败")
             }
@@ -796,6 +804,7 @@ struct TemperatureView: View {
 
     private func writeFixedSpeed(_ speed: Double, for index: Int) {
         if hardwareMonitor.fanControlEnabled {
+            fanTargetSpeeds[index] = speed
             hardwareMonitor.setFanSpeedWithAdmin(fanIndex: index, speed: speed) { ok in
                 fanWriteStatus[index] = ok ? lm.translate("Set (Admin)", "已设定(管理员)") : lm.translate("Failed", "失败")
             }
@@ -852,11 +861,7 @@ struct TemperatureView: View {
         let needsAdmin = preset.fanAutoModes.values.contains(false)
         if needsAdmin && !hardwareMonitor.fanControlEnabled {
             FanInstallManager.install { ok in
-                if ok {
-                    hardwareMonitor.refreshFanControlEnabled()
-                    bringAppToFront()
-                    executePreset(preset)
-                }
+                if ok { hardwareMonitor.refreshFanControlEnabled(); bringAppToFront(); executePreset(preset) }
             }
         } else {
             executePreset(preset)
