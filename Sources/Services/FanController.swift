@@ -230,15 +230,7 @@ extension HardwareMonitor {
             completion(false)
             return
         }
-        // Reuse the granted auth: try a direct SMC write first. On current
-        // macOS the deprecated AEWP re-prompts even with a valid authRef,
-        // so the direct path avoids the repeated dialog while the elevated
-        // path remains the fallback (CHANGE-016).
-        if isAdminAuthorized {
-            let ok = setFanMode(fanIndex: fanIndex, auto: auto)
-            completion(ok)
-            return
-        }
+        // All writes go through the sudo channel (CHANGE-019).
         let mode = auto ? 0 : 1
         runWithAdmin(args: ["--set-fan-mode", "\(fanIndex)", "\(mode)"], completion: completion)
     }
@@ -265,13 +257,8 @@ extension HardwareMonitor {
             logger("FanController: 转速 \(Int(speed)) 超出范围 "
                 + "[\(Int(fan.minSpeed)), \(Int(fan.maxSpeed))]，已收敛为 \(Int(target))")
         }
-        // Reuse the granted auth: direct SMC write first (avoids the
-        // repeated AEWP dialog on current macOS); elevated path as fallback.
-        if isAdminAuthorized {
-            let ok = setFanSpeed(fanIndex: fanIndex, speed: target)
-            completion(ok)
-            return
-        }
+        // All writes go through the sudo channel (CHANGE-019) — direct SMC
+        // writes need root and the old AEWP path is dead on current macOS.
         runWithAdmin(args: ["--set-fan", "\(fanIndex)", "\(Int(target))"], completion: completion)
     }
 

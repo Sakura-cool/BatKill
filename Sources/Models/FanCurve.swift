@@ -337,10 +337,9 @@ final class FanCurveStore: ObservableObject {
     /// Called by the TemperatureView refresh timer each tick.
     func driveFan(fan: FanInfo, hardwareMonitor: HardwareMonitor) {
         guard !hardwareMonitor.thermalThrottled else { return }
-        // Reuse the one authorized session — never re-request authorization
-        // from the timer path. Without an active authRef, skip writes so no
-        // dialog or failed exec is triggered (CHANGE-016).
-        guard hardwareMonitor.isAdminAuthorized else { return }
+        // Only drive the curve when the sudo fan channel is installed; the
+        // timer path never triggers the install prompt (CHANGE-019).
+        guard hardwareMonitor.fanControlEnabled else { return }
         // Permanently stop automatic writes while the privileged channel is
         // blocked (broken on macOS 27). Only explicit user actions re-arm it
         // via `retryAdminExec()` — otherwise the timer re-triggers the auth
