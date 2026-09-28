@@ -26,6 +26,9 @@ struct TestMain {
         TestRunner.register("FanInstallManagerTests") { FanInstallManagerTests() }
         TestRunner.register("FanControllerTests") { FanControllerTests() }
         TestRunner.register("CLIFanWriterTests") { CLIFanWriterTests() }
+        TestRunner.register("UpdaterTests") { UpdaterTests() }
+        TestRunner.register("TemperatureReadingTests") { TemperatureReadingTests() }
+        TestRunner.register("ProcessKillerTests") { ProcessKillerTests() }
 
         // Run all tests
         TestRunner.runAll()

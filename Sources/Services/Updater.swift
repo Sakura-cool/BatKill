@@ -131,16 +131,7 @@ final class VersionChecker: ObservableObject {
     /// Compares a remote version string against the local version using
     /// semantic versioning (major.minor.patch), component by component.
     private func isNewer(remote: String) -> Bool {
-        let local = currentVersion.split(separator: ".").map { Int($0) ?? 0 }
-        let remoteParts = remote.split(separator: ".").map { Int($0) ?? 0 }
-        let count = max(local.count, remoteParts.count)
-        for i in 0..<count {
-            let l = i < local.count ? local[i] : 0
-            let r = i < remoteParts.count ? remoteParts[i] : 0
-            if r > l { return true }
-            if r < l { return false }
-        }
-        return false
+        compareVersions(currentVersion, remote)
     }
 }
 
@@ -367,4 +358,20 @@ final class Updater: ObservableObject {
         return "x86_64"
         #endif
     }
+}
+
+/// Compares two dotted version strings (`"1.9.0"` vs `"1.9"`), component by
+/// component, treating missing parts as 0. Returns `true` when `remote` is
+/// strictly newer than `local`. Extracted so the comparison is unit-testable.
+func compareVersions(_ local: String, _ remote: String) -> Bool {
+    let localParts = local.split(separator: ".").map { Int($0) ?? 0 }
+    let remoteParts = remote.split(separator: ".").map { Int($0) ?? 0 }
+    let count = max(localParts.count, remoteParts.count)
+    for i in 0..<count {
+        let l = i < localParts.count ? localParts[i] : 0
+        let r = i < remoteParts.count ? remoteParts[i] : 0
+        if r > l { return true }
+        if r < l { return false }
+    }
+    return false
 }

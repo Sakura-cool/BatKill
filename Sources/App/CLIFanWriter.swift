@@ -80,6 +80,43 @@ func handleCLIArgs() -> Bool {
         exit(1)
     }
 
+    // --verify-fan <fanIndex> <targetRPM>
+    // Integration check: switch manual, write target, read back, restore
+    // auto. Exits 0 if |readback - target| <= tolerance, else 1. Runs as
+    // root (via sudo) so the SMC write path is truly exercised.
+    if args[1] == "--verify-fan", args.count == 4 {
+        guard isValidFanCLIIndex(args[2]), let fanIndex = Int(args[2]) else {
+            fputs("batkill-fan: 非法风扇索引参数 \(args[2])\n", stderr)
+            exit(1)
+        }
+        guard isValidFanCLISpeed(args[3]), let target = Double(args[3]) else {
+            fputs("batkill-fan: 非法转速参数 \(args[3])\n", stderr)
+            exit(1)
+        }
+        let monitor = HardwareMonitor()
+        guard let fan = monitor.readFans().first(where: { $0.index == fanIndex }) else {
+            fputs("batkill-fan: 风扇 \(fanIndex) 未找到\n", stderr)
+            exit(1)
+        }
+        // Clamp to the fan's real range, then write.
+        let clamped = min(max(target, fan.minSpeed), fan.maxSpeed)
+        let manualOK = monitor.setFanMode(fanIndex: fanIndex, auto: false)
+        let writeOK = manualOK && monitor.setFanSpeed(fanIndex: fanIndex, speed: clamped)
+        // Fans respond with mechanical inertia; give 3s to approach target.
+        Thread.sleep(forTimeInterval: 3.0)
+        guard let readback = monitor.readFans().first(where: { $0.index == fanIndex })?.currentSpeed else {
+            fputs("batkill-fan: 验证读取失败\n", stderr)
+            exit(1)
+        }
+        // Restore system control regardless of outcome.
+        _ = monitor.setFanMode(fanIndex: fanIndex, auto: true)
+        let tolerance: Double = 250
+        let ok = writeOK && abs(readback - clamped) <= tolerance
+        fputs("batkill-fan: verify target=\(Int(clamped)) readback=\(Int(readback)) \(ok ? "OK" : "FAIL")\n",
+              stdout)
+        exit(ok ? 0 : 1)
+    }
+
     return false
 }
 

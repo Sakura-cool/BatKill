@@ -50,16 +50,17 @@ enum FanInstallManager {
         }
     }
 
-    /// Generates the sudoers rule text for the given user: two NOPASSWD
+    /// Generates the sudoers rule text for the given user: three NOPASSWD
     /// lines scoped to the exact CLI path with fnmatch argument wildcards
     /// (macOS sudo lacks POSIX ERE argument matching, so `^[0-9]+$` would
     /// be treated literally and never match; `[0-9]*` / `[01]` are baseline
     /// glob features). One line per command, each ending in a newline.
-    /// Extracted as a pure function so the security-critical rule shape is
-    /// unit-testable (CHANGE-019).
+    /// `--verify-fan` is included so the integration test can run under
+    /// sudo without prompting (CHANGE-019/CHANGE-020).
     static func sudoersRule(for user: String) -> String {
         "\(user) ALL=(root) NOPASSWD: \(cliPath) --set-fan [0-9]* [0-9]*\n"
             + "\(user) ALL=(root) NOPASSWD: \(cliPath) --set-fan-mode [0-9]* [01]\n"
+            + "\(user) ALL=(root) NOPASSWD: \(cliPath) --verify-fan [0-9]* [0-9]*\n"
     }
 
     /// One-time install: copies the CLI and writes the sudoers rule using a

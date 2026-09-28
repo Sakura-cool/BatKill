@@ -161,28 +161,35 @@ extension HardwareMonitor {
     }
 
     private func decodeTemperature(bytes: [UInt8], dataType: FourCharCode) -> Double {
-        if dataType == HardwareMonitor.fltType, bytes.count >= 4 {
-            let raw = bytes.withUnsafeBytes { $0.load(fromByteOffset: 0, as: Float32.self) }
-            return Double(raw)
-        } else if dataType == HardwareMonitor.sp78Type, bytes.count >= 2 {
-            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
-            return Double(raw) / 256.0
-        } else if dataType == HardwareMonitor.fdsType, bytes.count >= 2 {
-            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
-            return Double(raw) / 4.0
-        } else if dataType == HardwareMonitor.fpe2Type, bytes.count >= 2 {
-            let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
-            return Double(raw) / 64.0
-        } else if dataType == HardwareMonitor.fp2eType, bytes.count >= 2 {
-            let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
-            return Double(raw) / 64.0
-        } else if dataType == HardwareMonitor.fp1aType, bytes.count >= 2 {
-            let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
-            return Double(raw) / 1024.0
-        } else if bytes.count >= 2 {
-            let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
-            return Double(raw) / 256.0
-        }
-        return 0
+        decodeSMCTemperature(bytes: bytes, dataType: dataType)
     }
+}
+
+/// Decodes raw SMC bytes into a temperature value based on the key's data
+/// type (`sp78`, `fds`, `fpe2`, `fp2e`, `fp1a`, `flt`, else raw /256).
+/// Extracted so the decoding table is unit-testable.
+func decodeSMCTemperature(bytes: [UInt8], dataType: FourCharCode) -> Double {
+    if dataType == HardwareMonitor.fltType, bytes.count >= 4 {
+        let raw = bytes.withUnsafeBytes { $0.load(fromByteOffset: 0, as: Float32.self) }
+        return Double(raw)
+    } else if dataType == HardwareMonitor.sp78Type, bytes.count >= 2 {
+        let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+        return Double(raw) / 256.0
+    } else if dataType == HardwareMonitor.fdsType, bytes.count >= 2 {
+        let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+        return Double(raw) / 4.0
+    } else if dataType == HardwareMonitor.fpe2Type, bytes.count >= 2 {
+        let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
+        return Double(raw) / 64.0
+    } else if dataType == HardwareMonitor.fp2eType, bytes.count >= 2 {
+        let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
+        return Double(raw) / 64.0
+    } else if dataType == HardwareMonitor.fp1aType, bytes.count >= 2 {
+        let raw = UInt16(bytes[0]) << 8 | UInt16(bytes[1])
+        return Double(raw) / 1024.0
+    } else if bytes.count >= 2 {
+        let raw = Int16(bytes[0]) << 8 | Int16(bytes[1])
+        return Double(raw) / 256.0
+    }
+    return 0
 }

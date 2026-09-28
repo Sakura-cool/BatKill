@@ -598,9 +598,7 @@ final class ProcessKiller: ObservableObject {
 
     /// Escapes special characters in a string for safe embedding in AppleScript.
     private func escapeAppleScript(_ str: String) -> String {
-        str.replacingOccurrences(of: "\\", with: "\\\\")
-           .replacingOccurrences(of: "\"", with: "\\\"")
-           .replacingOccurrences(of: "\n", with: "\\n")
+        escapeAppleScriptText(str)
     }
 
     // MARK: - Notifications
@@ -650,4 +648,13 @@ final class ProcessKiller: ObservableObject {
             trigger: nil
         ))
     }
+}
+
+/// Escapes a string for safe embedding in an AppleScript string literal:
+/// backslash → `\\`, double quote → `\"`, newline → `\n`. Extracted so the
+/// escaping rules are unit-testable.
+func escapeAppleScriptText(_ str: String) -> String {
+    str.replacingOccurrences(of: "\\", with: "\\\\")
+       .replacingOccurrences(of: "\"", with: "\\\"")
+       .replacingOccurrences(of: "\n", with: "\\n")
 }
