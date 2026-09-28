@@ -198,6 +198,11 @@ final class FanCurveStore: ObservableObject {
     /// used to skip redundant writes while driving the curve).
     private var lastWrittenSpeeds: [Int: Double] = [:]
 
+    /// Current applied speed per fan, used to ramp the curve target smoothly
+    /// so the fan does not jump on fast temperature swings (avoids wasteful
+    /// high-frequency SMC writes).
+    private var appliedSpeeds: [Int: Double] = [:]
+
     /// Whether a curve fan has already handed control to the system on
     /// over-threshold (runtime only; reset on recovery to prevent write loops).
     private var systemControlFlags: [Int: Bool] = [:]
@@ -339,10 +344,12 @@ final class FanCurveStore: ObservableObject {
                     self.setSystemControlActive(false, for: fan.index)
                 }
             }
-            // Skip redundant writes.
-            if lastWrittenSpeed(for: fan.index) != target {
-                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: target) { ok in
-                    if ok { self.recordWrittenSpeed(target, for: fan.index) }
+            // Smooth ramp toward the target: move a fraction each tick so
+            // fast temperature swings do not cause sudden speed jumps.
+            let write = smoothedSpeed(target: target, fan: fan)
+            if lastWrittenSpeed(for: fan.index) != write {
+                hardwareMonitor.setFanSpeedWithAdmin(fanIndex: fan.index, speed: write) { ok in
+                    if ok { self.recordWrittenSpeed(write, for: fan.index) }
                 }
             }
         case .systemControl:
@@ -352,5 +359,17 @@ final class FanCurveStore: ObservableObject {
                 self.setSystemControlActive(true, for: fan.index)
             }
         }
+    }
+
+    /// Ramps the fan speed toward `target`: each tick moves 30% of the gap
+    /// (min 10 RPM), so temperature-driven changes transition smoothly.
+    private func smoothedSpeed(target: Double, fan: FanInfo) -> Double {
+        let current = appliedSpeeds[fan.index] ?? fan.currentSpeed
+        let delta = target - current
+        if abs(delta) <= 10 { return target }
+        let step = delta * 0.3
+        let next = current + step
+        appliedSpeeds[fan.index] = next
+        return next
     }
 }
