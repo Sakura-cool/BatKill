@@ -96,27 +96,27 @@ extension HardwareMonitor {
             return true
         }
 
-        // ── 2. Previously denied → honour user's choice, no dialog ──
+        // ── 2. Single in-flight guard: only one dialog may be shown at a
+        // time. Set immediately after the reuse check so concurrent callers
+        // (multiple fans' authorize buttons) are rejected before any dialog.
+        guard !HardwareMonitor.authInProgress else {
+            ctx.log("授权弹窗已存在，跳过")
+            return false
+        }
+        HardwareMonitor.authInProgress = true
+        defer {
+            // The synchronous AuthorizationCopyRights below blocks until the
+            // user interacts, so inProgress is always reset right after.
+            HardwareMonitor.authInProgress = false
+        }
+
+        // ── 3. Previously denied → honour user's choice, no dialog ──
         guard !HardwareMonitor.authDenied else {
             ctx.log("用户此前拒绝了授权，跳过弹窗")
             return false
         }
 
-        // ── 3. Already in flight → single-instance guard ──
-        guard !HardwareMonitor.authInProgress else {
-            ctx.log("授权弹窗已存在，跳过")
-            return false
-        }
-
         // ── 4. Show the system auth dialog ──
-        HardwareMonitor.authInProgress = true
-        defer {
-            // The synchronous call below blocks until user interacts,
-            // so inProgress is always reset immediately after, but the
-            // guard above prevents concurrent entry from other callers.
-            HardwareMonitor.authInProgress = false
-        }
-
         var ref: AuthorizationRef?
         guard AuthorizationCreate(nil, nil, [], &ref) == errAuthorizationSuccess,
               let ref = ref else {
