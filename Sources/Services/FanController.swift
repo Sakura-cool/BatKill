@@ -188,7 +188,11 @@ extension HardwareMonitor {
             return
         }
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // Serialize all privileged exec on one queue: only ONE
+        // AuthorizationExecuteWithPrivileges (and thus one system dialog)
+        // runs at a time. Concurrent per-fan timer writes would otherwise
+        // stack multiple dialogs (CHANGE-016).
+        HardwareMonitor.adminAuthQueue.async { [weak self] in
             // Convert Swift strings to C strings for the auth API
             var cArgs = args.map { strdup($0) }
             defer { cArgs.forEach { free($0) } }

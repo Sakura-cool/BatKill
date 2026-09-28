@@ -29,25 +29,40 @@ struct SavePresetFanRow: View {
             Spacer()
 
             if !isAuto && subMode == .curve {
-                VStack(alignment: .trailing, spacing: 2) {
-                    if let curve {
-                        Text("\(Int(curve.curveRange.min)) - \(Int(curve.curveRange.max)) RPM")
+                if let curve {
+                    HStack(spacing: 6) {
+                        Text("\(Self.rangeText(curve.curveRange.min, curve.curveRange.max))")
                             .font(.system(.caption2, design: .monospaced))
                             .foregroundColor(.secondary)
                         CurveThumbnail(curve: curve)
-                            .frame(width: 96, height: 22)
-                    } else {
-                        Text("—")
-                            .font(.caption2).foregroundColor(.secondary)
+                            .frame(width: 56, height: 18)
                     }
+                } else {
+                    Text("—")
+                        .font(.caption2).foregroundColor(.secondary)
                 }
             } else if !isAuto {
-                Text("\(Int(speed)) RPM")
+                Text(Self.rpmText(speed))
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundColor(.secondary)
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// Formats a fan speed: ≥1000 → "x.xk" (one decimal, truncated, no
+    /// rounding up); below 1000 → integer RPM.
+    private static func rpmText(_ value: Double) -> String {
+        if value >= 1000 {
+            let k = value / 1000
+            let truncated = (k * 10).rounded(.down) / 10
+            return String(format: "%.1fk", truncated)
+        }
+        return "\(Int(value))"
+    }
+
+    private static func rangeText(_ min: Double, _ max: Double) -> String {
+        "\(rpmText(min)) - \(rpmText(max))"
     }
 
     private var modeBadge: some View {

@@ -148,6 +148,11 @@ final class HardwareMonitor: ObservableObject {
     /// than one auth dialog simultaneously. Reset after the dialog completes.
     static var authInProgress = false
 
+    /// Serial queue serializing privileged exec (AuthorizationExecuteWith
+    /// Privileges) calls. Guarantees only ONE dialog/write in flight at a
+    /// time — concurrent per-fan timer writes can't stack multiple dialogs.
+    static let adminAuthQueue = DispatchQueue(label: "com.batkill.admin-auth", qos: .userInitiated)
+
     /// Latch: privileged exec channel failed (deprecated
     /// `AuthorizationExecuteWithPrivileges` errors on current macOS). While
     /// set, automatic writes are skipped to avoid hammering every tick.
