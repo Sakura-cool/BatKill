@@ -283,16 +283,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         versionButton.sizeToFit()
         titleBarVersionButton = versionButton
 
-        let helpButton = NSButton(title: "?",
-                                  target: self,
-                                  action: #selector(titleBarHelpClicked))
+        let helpButton = NSButton()
         helpButton.isBordered = false
-        helpButton.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        helpButton.image = NSImage(systemSymbolName: "questionmark.circle",
+                                   accessibilityDescription: "Usage guide")
+        helpButton.imagePosition = .imageOnly
+        helpButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         helpButton.contentTintColor = .secondaryLabelColor
         helpButton.toolTip = localizationManager.translate("Usage guide", "使用说明书")
-        helpButton.bezelStyle = .inline
+        helpButton.target = self
+        helpButton.action = #selector(titleBarHelpClicked)
         helpButton.sizeToFit()
-        titleBarHelpButton = helpButton
         titleBarHelpButton = helpButton
 
         // Height matches the standard title bar (~28pt) so the content
