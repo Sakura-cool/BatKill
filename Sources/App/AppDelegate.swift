@@ -350,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             + "   - Auto: system-managed\n"
             + "   - Fixed: drag the slider (applies after 0.1s)\n"
             + "   - Curve: edit nodes on the chart (applies after 0.1s)\n"
-            + "4. Status badge next to the picker shows 已生效/生效中\n\n"
+            + "4. Status badge next to the picker shows Applied/Applying\n\n"
             + "Presets:\n"
             + "Save the current layout, apply or delete saved presets.\n\n"
             + "Threshold guard:\n"

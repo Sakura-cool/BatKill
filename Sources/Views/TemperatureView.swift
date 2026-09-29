@@ -861,6 +861,9 @@ struct TemperatureView: View {
         for (index, speed) in preset.fanSpeeds {
             fanPendingSpeeds[index] = speed
             if preset.fanAutoModes[index] != true {
+                // Record the applied target so the status badge shows
+                // 生效中/已生效 instead of 未设定 (CHANGE-022).
+                fanTargetSpeeds[index] = speed
                 hardwareMonitor.setFanSpeedWithAdmin(fanIndex: index, speed: speed) { [self] _ in }
             }
         }
