@@ -728,7 +728,7 @@ struct TemperatureView: View {
                 Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.secondary)
-                    .frame(width: 52, alignment: .trailing)
+                    .lineLimit(1).fixedSize()
 
                 FanStatusBadge(isManual: isManual,
                                target: fanTargetSpeeds[fan.index],

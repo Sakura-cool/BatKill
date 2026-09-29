@@ -191,8 +191,10 @@ struct TemperatureGroup: Identifiable {
 /// Contains the fan's index, name, speed range (min/max), current speed,
 /// and whether it is in automatic (system-managed) or manual mode.
 struct FanInfo: Identifiable {
-    /// Unique identifier for this fan (auto-generated; not the fan index).
-    let id = UUID()
+    /// Stable identity = fan index (CHANGE-030). Using a fresh UUID here
+    /// meant every 1s refresh replaced the view identity, tearing down the
+    /// fan row (and closing the curve node editor mid-edit).
+    var id: Int { index }
 
     /// Zero-based index of this fan (used in SMC key construction, e.g., "F0Ac" for fan 0).
     let index: Int
