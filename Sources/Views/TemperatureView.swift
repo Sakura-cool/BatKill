@@ -716,9 +716,9 @@ struct TemperatureView: View {
                         }
                     }
                 )) {
-                    Text(lm.translate("Auto", "自动")).tag(0)
-                    Text(lm.translate("Fixed", "定速")).tag(1)
-                    Text(lm.translate("Curve", "调速")).tag(2)
+                    Text(lm.translate("Auto", "自动")).frame(width: 48).tag(0)
+                    Text(lm.translate("Fixed", "定速")).frame(width: 48).tag(1)
+                    Text(lm.translate("Curve", "调速")).frame(width: 48).tag(2)
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
@@ -757,25 +757,20 @@ struct TemperatureView: View {
                                              onAuthorize: { self.authorizeFixedFan(for: fan.index) })
                     }
                 } else {
-                    VStack(spacing: 6) {
-                        Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
-                            .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                    HStack(spacing: 6) {
+                        Image(systemName: hardwareMonitor.thermalThrottled ? "exclamationmark.triangle.fill" : "arrow.uturn.left.circle.fill")
+                            .font(.caption2)
+                            .foregroundColor(hardwareMonitor.thermalThrottled ? .orange : .green)
+                        Text(hardwareMonitor.thermalThrottled
+                             ? lm.translate("Thermal protection — system controls", "过温守护 — 系统接管")
+                             : lm.translate("Auto — system controls the fan", "自动模式 — 由系统控制"))
+                            .font(.caption2)
                             .foregroundColor(.secondary)
-                        HStack(spacing: 6) {
-                            Image(systemName: hardwareMonitor.thermalThrottled ? "exclamationmark.triangle.fill" : "arrow.uturn.left.circle.fill")
-                                .font(.caption2)
-                                .foregroundColor(hardwareMonitor.thermalThrottled ? .orange : .green)
-                            Text(hardwareMonitor.thermalThrottled
-                                 ? lm.translate("Thermal protection — system controls", "过温守护 — 系统接管")
-                                 : lm.translate("Auto — system controls the fan", "自动模式 — 由系统控制"))
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 2)
                 }
             }
-            .frame(height: 210, alignment: .top)
         }
         .padding(.vertical, 6)
     }
