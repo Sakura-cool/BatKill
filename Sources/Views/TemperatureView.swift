@@ -716,12 +716,12 @@ struct TemperatureView: View {
                         }
                     }
                 )) {
-                    Text(lm.translate("Auto", "自动")).frame(width: 48).tag(0)
-                    Text(lm.translate("Fixed", "定速")).frame(width: 48).tag(1)
-                    Text(lm.translate("Curve", "调速")).frame(width: 48).tag(2)
+                    Text(lm.translate("Auto", "自动")).tag(0)
+                    Text(lm.translate("Fixed", "定速")).tag(1)
+                    Text(lm.translate("Curve", "调速")).tag(2)
                 }
                 .pickerStyle(.segmented)
-                .fixedSize()
+                .frame(width: 162)
 
                 Spacer()
 
