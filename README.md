@@ -13,10 +13,14 @@ macOS 菜单栏工具 — 电池供电时自动终止指定软件，接入交流
 - **CPU 温度监控** — 实时显示各核心温度（P-Core / E-Core 动态命名）
 - **风扇控制** — 查看转速，手动/自动模式切换（0-1200 RPM 步进 100，1200+ 步进 1）
 - **手动双模式** — 手动模式分「定速」（固定转速）与「调速」（温度-转速曲线：0~阈值每 10°C 一档，温度区间线性插值，超阈值交还系统）
+- **模式切换即时生效** — 切换定速/调速/自动时立即完成一次该模式设定，无需再手动操作
+- **生效状态徽标** — 模式切换行实时显示「已生效 / 生效中 / 已恢复自动」图标状态（按设定值与实际转速收敛判定）
 - **调速曲线编辑** — 曲线图可视化（X 轴温度/Y 轴转速），点击节点输入转速、拖拽节点快速调整，转速随温度平滑过渡
 - **风扇预设** — 保存/加载/删除风扇配置方案，记忆每把风扇的手动子模式与调速曲线，激活时联动展示对应设置
 - **温度阈值保护** — 可设置 CPU 温度阈值（60-120°C），超过后自动将风扇交还系统控制
 - **过温守护** — 超过阈值时锁定手动模式，自动恢复风扇自动模式
+- **转速实时刷新** — 打开温度窗口后每 ~1s 刷新转速显示（不依赖模式选择，关闭窗口停止读取）
+- **sudo 免密写入通道** — 一次性授权安装 `batkill-fan` 提权 CLI + sudoers 规则，之后风扇写入零弹窗、真实生效（macOS 27 替代失效的 AEWP）
 - **系统信息** — 显示 CPU 型号、内存容量、磁盘容量
 - **温度角标** — 设置图标上叠加实时 CPU 温度值
 - **已选/待恢复列表** — 独立弹窗管理已选程序和待恢复程序
@@ -66,13 +70,15 @@ Sources/
 ├── App/                        # 应用入口与委托
 │   ├── BatKillApp.swift           # @main SwiftUI 入口
 │   ├── AppDelegate.swift          # 应用委托、电源队列、窗口管理
-│   └── CLIFanWriter.swift         # CLI 风扇写入（管理员提权通道）
+│   ├── BatKillFanCLI.swift        # batkill-fan 提权 CLI 入口（sudo 通道）
+│   └── CLIFanWriter.swift         # CLI 风扇写入参数解析与白名单校验
 ├── Core/                       # 基础工具
 │   ├── Logger.swift               # 文件日志 (/tmp/batkill.log)
 │   └── Extensions.swift           # Binding.onChange、Notification.Name 扩展
 ├── Models/                     # 数据模型
 │   ├── AppItem.swift              # AppItem、AppCategory
 │   ├── FanPreset.swift            # FanPreset、FanPresetStore
+│   ├── FanCurve.swift             # 温度-转速曲线模型与 FanCurveStore
 │   ├── HardwareModels.swift       # 温度传感器、风扇信息、SMC 数据结构
 │   └── ThresholdStore.swift       # 温度阈值持久化存储
 ├── Services/                   # 业务逻辑层
@@ -81,7 +87,8 @@ Sources/
 │   ├── AppLister.swift            # 应用发现（.app、LaunchAgents、brew services）
 │   ├── HardwareMonitor.swift      # SMC 连接与读写核心
 │   ├── TemperatureReading.swift   # 温度传感器键映射与解码
-│   ├── FanController.swift        # 风扇读写与管理员授权
+│   ├── FanController.swift        # 风扇读写（sudo 免密通道）
+│   ├── FanInstallManager.swift    # batkill-fan 一次性安装 + sudoers 规则
 │   ├── LocalizationManager.swift  # 中英双语翻译管理
 │   └── Updater.swift              # GitHub Release 版本检测与更新
 ├── Views/                      # SwiftUI 视图
@@ -90,9 +97,22 @@ Sources/
 │   ├── SelectedAppsSheet.swift    # 已选应用列表弹窗
 │   ├── PendingRestoreSheet.swift  # 待恢复应用列表弹窗
 │   ├── PopoverView.swift          # 菜单栏弹窗
+│   ├── FanFixedSpeedControls.swift# 定速控制（滑块 + 0.1s 延迟生效）
+│   ├── FanCurvePanel.swift        # 调速曲线编辑器（节点编辑/拖拽）
+│   ├── FanStatusBadge.swift       # 模式切换行生效状态徽标
+│   ├── SavePresetSheet.swift      # 保存预设弹窗（三模式预览）
+│   ├── AdminGateOverlay.swift     # 未授权蒙版 + 启用风扇控制
+│   ├── RefreshInterval.swift      # 刷新间隔常量（含 debounce 常量）
 │   └── TemperatureView.swift      # 温度监控窗口
 └── UI/                         # 系统级 UI
     └── MenuBarManager.swift       # NSStatusItem、角标渲染、右键菜单、通知面板
+Tests/
+├── Sources/                    # 单元测试（405 用例，自研轻量框架）
+│   ├── Models/                    # AppItem/FanPreset/FanCurve/ThresholdStore/HardwareModels
+│   ├── Services/                  # FanController/FanInstallManager/HardwareMonitor/Updater/TemperatureReading/ProcessKiller 等
+│   └── integration/               # 集成测试（风扇通道 / 更新通道，零依赖 bash）
+docs/
+└── USAGE.md                   # 简易使用说明书
 ```
 
 ## 许可
