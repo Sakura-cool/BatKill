@@ -290,8 +290,19 @@ final class FanCurveStore: ObservableObject {
 
     /// Applies preset per-fan sub-modes and curves so the fan-control UI
     /// switches to the matching sub-mode (定速 slider vs 调速 curve chart).
+    /// Resets ALL fans to the default `.fixed` first (CHANGE-032): old presets
+    /// stored no sub-mode, so without the reset a stale 调速 from a previous
+    /// preset leaked into the next one and made the mode picker show 调速
+    /// where the preset intended plain 定速.
     func applyPresetSubModes(_ subModes: [Int: ManualSubMode]?,
                              curves presetCurves: [Int: FanCurve]?) {
+        var covered = Set<Int>()
+        if let sm = subModes { covered.formUnion(sm.keys) }
+        if let fc = presetCurves { covered.formUnion(fc.keys) }
+        let keysToReset = self.subModes.keys.filter { !covered.contains($0) }
+        for index in keysToReset {
+            setSubMode(.fixed, for: index)
+        }
         for (index, mode) in subModes ?? [:] {
             setSubMode(mode, for: index)
         }
