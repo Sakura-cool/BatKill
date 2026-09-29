@@ -30,7 +30,7 @@ struct NativeSegmentedPicker: NSViewRepresentable {
     /// Selected segment index (0-based).
     @Binding var selection: Int
     /// Fixed control width in points.
-    var width: CGFloat = 162
+    var width: CGFloat = 138
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -44,6 +44,7 @@ struct NativeSegmentedPicker: NSViewRepresentable {
             action: #selector(Coordinator.selectionChanged(_:))
         )
         control.fixedWidth = width
+        control.controlSize = .small
         control.segmentDistribution = .fillEqually
         control.selectedSegment = selection
         return control

@@ -719,7 +719,7 @@ struct TemperatureView: View {
                         }
                     }
                 ))
-                .frame(width: 162)
+                .frame(width: 138)
 
                 Spacer()
 
