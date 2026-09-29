@@ -446,20 +446,18 @@ final class MenuBarManager: NSObject, ObservableObject {
 
 // Notification.Name extensions are defined centrally in Core/Extensions.swift
 
-/// Popover background using the system `.popover` material with a subtle
-/// border that follows the current appearance (light/dark).
-private final class PopoverBackgroundView: NSVisualEffectView {
+/// Popover background: a crisp rounded card that follows the current
+/// appearance (light/dark). Uses a near-opaque fill + subtle border so the
+/// content reads clearly (no translucent-vibrancy blur that looks washed
+/// out against the desktop).
+private final class PopoverBackgroundView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
-        material = .popover
-        blendingMode = .behindWindow
-        state = .active
-        isEmphasized = true
         wantsLayer = true
-        layer?.cornerRadius = 12
+        layer?.cornerRadius = 10
         layer?.masksToBounds = true
         layer?.borderWidth = 1
-        updateBorderColor()
+        updateColors()
     }
 
     @available(*, unavailable)
@@ -469,13 +467,28 @@ private final class PopoverBackgroundView: NSVisualEffectView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateBorderColor()
+        updateColors()
     }
 
-    private func updateBorderColor() {
+    override func layout() {
+        super.layout()
+        // Keep the shadow outside the masked layer (draw on the superview
+        // so the rounded card still casts a soft shadow).
+        layer?.shadowPath = CGPath(
+            roundedRect: bounds.insetBy(dx: 1, dy: 1),
+            cornerWidth: 10, cornerHeight: 10, transform: nil)
+        layer?.shadowOpacity = 0.18
+        layer?.shadowRadius = 8
+        layer?.shadowOffset = .zero
+    }
+
+    private func updateColors() {
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        layer?.backgroundColor = (isDark
+            ? NSColor(calibratedWhite: 0.11, alpha: 0.98)
+            : NSColor(calibratedWhite: 1.0, alpha: 0.98)).cgColor
         layer?.borderColor = (isDark
-            ? NSColor.white.withAlphaComponent(0.14)
-            : NSColor.black.withAlphaComponent(0.12)).cgColor
+            ? NSColor.white.withAlphaComponent(0.15)
+            : NSColor.black.withAlphaComponent(0.10)).cgColor
     }
 }
