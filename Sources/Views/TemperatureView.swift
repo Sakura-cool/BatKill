@@ -677,22 +677,10 @@ struct TemperatureView: View {
         let isManual = fanManualModes[fan.index] ?? false
 
         return VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            HStack(spacing: 8) {
                 Text(fan.name)
                     .font(.caption).fontWeight(.medium)
                     .frame(width: 80, alignment: .leading)
-
-                Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .frame(width: 52, alignment: .trailing)
-
-                FanStatusBadge(isManual: isManual,
-                                    target: fanTargetSpeeds[fan.index],
-                                    currentSpeed: fan.currentSpeed,
-                                    lm: lm)
-
-                Spacer()
 
                 // Mode segmented picker: 自动 | 定速 | 调速.
                 Picker("", selection: Binding(
@@ -733,6 +721,18 @@ struct TemperatureView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 180)
+
+                Spacer()
+
+                Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(width: 52, alignment: .trailing)
+
+                FanStatusBadge(isManual: isManual,
+                               target: fanTargetSpeeds[fan.index],
+                               currentSpeed: fan.currentSpeed,
+                               lm: lm)
             }
 
             if isManual && !hardwareMonitor.thermalThrottled {
