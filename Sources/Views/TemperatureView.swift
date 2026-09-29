@@ -68,6 +68,11 @@ struct TemperatureView: View {
     /// Per-fan flags indicating admin authorization is needed before writing.
     @State private var fanNeedsAdmin: [Int: Bool] = [:]
 
+    /// Index of the fan whose control panel (fixed slider / curve editor) is
+    /// shown in the shared detail slot below the fan rows. Clicking a fan
+    /// row, or flipping its mode picker, activates that fan (CHANGE-027).
+    @State private var activeFanIndex: Int?
+
     /// Snapshot of fan states saved before thermal throttling, so they
     /// can be restored when the CPU cools back below the threshold.
     @State private var savedFanModes: [Int: Bool] = [:]
@@ -666,6 +671,7 @@ struct TemperatureView: View {
                         Divider().padding(.leading, 8)
                     }
                 }
+                fanDetailSlot
             }
         }
         .padding(12)
@@ -673,88 +679,108 @@ struct TemperatureView: View {
         .cornerRadius(8)
     }
 
-    private func fanControlRow(_ fan: FanInfo) -> some View {
-        let isManual = fanManualModes[fan.index] ?? false
+    // MARK: - Shared Detail Slot (CHANGE-027)
 
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(fan.name)
-                    .font(.caption).fontWeight(.medium)
-                    .lineLimit(1)
-                    .fixedSize()
-
-                // Mode segmented picker: 自动 | 定速 | 调速.
-                Picker("", selection: Binding(
-                    get: {
-                        if !isManual { return 0 }
-                        return curveStore.subMode(for: fan.index) == .curve ? 2 : 1
-                    },
-                    set: { newValue in
-                        let wantsManual = newValue != 0
-                                        if wantsManual && hardwareMonitor.thermalThrottled { return }
-                        fanManualModes[fan.index] = wantsManual
-                        if newValue == 2 {
-                            curveStore.setSubMode(.curve, for: fan.index)
-                        } else {
-                            curveStore.setSubMode(.fixed, for: fan.index)
-                        }
-                        fanNeedsAdmin[fan.index] = nil
-
-                        // Apply the selected mode immediately (CHANGE-022):
-                        // fixed → write the current pending speed once;
-                        // curve → write the target for the current temp;
-                        // auto → hand control back to the system.
-                        switch newValue {
-                        case 2:
-                            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { _ in self.applyCurveSpeed(for: fan) }
-                        case 1:
-                            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
-                                if ok { let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed; self.writeFixedSpeed(speed, for: fan.index) }
-                            }
-                        default:
-                            hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { _ in }
-                        }
-                    }
-                )) {
-                    Text(lm.translate("Auto", "自动")).tag(0)
-                    Text(lm.translate("Fixed", "定速")).tag(1)
-                    Text(lm.translate("Curve", "调速")).tag(2)
+    /// Active fan's control panel, BELOW all rows (mode switches never move rows).
+    @ViewBuilder
+    private var fanDetailSlot: some View {
+        if let index = activeFanIndex, let fan = hardwareMonitor.fans.first(where: { $0.index == index }),
+           fanManualModes[fan.index] != false, !hardwareMonitor.thermalThrottled {
+            Divider().padding(.vertical, 4)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "slider.horizontal.3").font(.caption2).foregroundColor(.secondary)
+                    Text(fan.name).font(.caption).fontWeight(.semibold).foregroundColor(.secondary)
+                    Spacer()
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 180)
-
-                Spacer()
-
-                Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .frame(width: 52, alignment: .trailing)
-
-                FanStatusBadge(isManual: isManual,
-                               target: fanTargetSpeeds[fan.index],
-                               currentSpeed: fan.currentSpeed,
-                               lm: lm)
-            }
-            .frame(maxWidth: .infinity)
-
-            if isManual && !hardwareMonitor.thermalThrottled {
                 if curveStore.subMode(for: fan.index) == .curve {
                     FanCurvePanel(fan: fan, curveStore: curveStore, lm: lm,
                                   onApplySpeed: { _ in self.applyCurveSpeed(for: fan) },
                                   needsAdmin: fanNeedsAdmin[fan.index] == true,
                                   onAuthorize: { self.authorizeCurveFan(for: fan) })
                 } else {
-                FanFixedSpeedControls(fan: fan, lm: lm, hardwareMonitor: hardwareMonitor,
-                                     pendingSpeed: Binding(
-                                         get: { fanPendingSpeeds[fan.index] ?? fan.currentSpeed },
-                                         set: { fanPendingSpeeds[fan.index] = $0 }),
-                                        needsAdmin: fanNeedsAdmin[fan.index] == true,
-                                     onSetSpeed: { s in self.writeFixedSpeed(s, for: fan.index) },
-                                     onAuthorize: { self.authorizeFixedFan(for: fan.index) })
+                    FanFixedSpeedControls(fan: fan, lm: lm, hardwareMonitor: hardwareMonitor,
+                                         pendingSpeed: Binding(get: { fanPendingSpeeds[fan.index] ?? fan.currentSpeed },
+                                                               set: { fanPendingSpeeds[fan.index] = $0 }),
+                                         needsAdmin: fanNeedsAdmin[fan.index] == true,
+                                         onSetSpeed: { s in self.writeFixedSpeed(s, for: fan.index) },
+                                         onAuthorize: { self.authorizeFixedFan(for: fan.index) })
                 }
             }
         }
+    }
+
+    private func fanControlRow(_ fan: FanInfo) -> some View {
+        let isManual = fanManualModes[fan.index] ?? false
+        let isActive = activeFanIndex == fan.index
+
+        return HStack(spacing: 8) {
+            Text(fan.name)
+                .font(.caption).fontWeight(.medium)
+                .lineLimit(1)
+                .fixedSize()
+
+            // Mode segmented picker: 自动 | 定速 | 调速.
+            Picker("", selection: Binding(
+                get: {
+                    if !isManual { return 0 }
+                    return curveStore.subMode(for: fan.index) == .curve ? 2 : 1
+                },
+                set: { newValue in
+                    let wantsManual = newValue != 0
+                                    if wantsManual && hardwareMonitor.thermalThrottled { return }
+                    fanManualModes[fan.index] = wantsManual
+                    activeFanIndex = fan.index
+                    if newValue == 2 {
+                        curveStore.setSubMode(.curve, for: fan.index)
+                    } else {
+                        curveStore.setSubMode(.fixed, for: fan.index)
+                    }
+                    fanNeedsAdmin[fan.index] = nil
+
+                    // Apply the selected mode immediately (CHANGE-022):
+                    // fixed → write the current pending speed once;
+                    // curve → write the target for the current temp;
+                    // auto → hand control back to the system.
+                    switch newValue {
+                    case 2:
+                        hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { _ in self.applyCurveSpeed(for: fan) }
+                    case 1:
+                        hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: false) { ok in
+                            if ok { let speed = fanPendingSpeeds[fan.index] ?? fan.currentSpeed; self.writeFixedSpeed(speed, for: fan.index) }
+                        }
+                    default:
+                        hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { _ in }
+                    }
+                }
+            )) {
+                Text(lm.translate("Auto", "自动")).tag(0)
+                Text(lm.translate("Fixed", "定速")).tag(1)
+                Text(lm.translate("Curve", "调速")).tag(2)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 180)
+
+            Spacer()
+
+            Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 52, alignment: .trailing)
+
+            FanStatusBadge(isManual: isManual,
+                           target: fanTargetSpeeds[fan.index],
+                           currentSpeed: fan.currentSpeed,
+                           lm: lm)
+        }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor.opacity(isActive ? 0.10 : 0))
+        )
+        .onTapGesture { activeFanIndex = fan.index }
     }
 
     // MARK: - Curve Panel
