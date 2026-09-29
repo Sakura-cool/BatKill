@@ -15,7 +15,6 @@ struct FanFixedSpeedControls: View {
     let hardwareMonitor: HardwareMonitor
 
     @Binding var pendingSpeed: Double
-    let statusMessage: String?
     let needsAdmin: Bool
 
     /// Called with the pending speed after the 0.1s debounce elapses.
@@ -64,12 +63,6 @@ struct FanFixedSpeedControls: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .tint(.orange)
-                }
-
-                if let status = statusMessage, !needsAdmin {
-                    Text(status)
-                        .font(.caption2)
-                        .foregroundColor(.green)
                 }
 
                 Spacer()

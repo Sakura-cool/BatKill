@@ -20,8 +20,6 @@ struct FanCurvePanel: View {
     /// Called when the user taps "生效" with the target speed for the
     /// current CPU temperature. The parent performs the admin write.
     var onApplySpeed: ((Double) -> Void)?
-    /// Status message after a write attempt (same slot as fixed-speed).
-    var statusMessage: String?
     /// Whether an admin authorization button should be shown.
     var needsAdmin: Bool = false
     /// Called when the user taps "授权管理员".
@@ -156,7 +154,7 @@ struct FanCurvePanel: View {
                                   Int(current), Int(targetSpeed)))
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.red)
-                Spacer()
+                    .padding(.trailing, 4)
 
                 // Admin authorization button (shown after first failed attempt)
                 if needsAdmin {
