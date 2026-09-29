@@ -684,10 +684,10 @@ struct TemperatureView: View {
                     .fixedSize()
 
                 // Mode segmented picker: 自动 | 定速 | 调速.
-                NativeSegmentedPicker(titles: [lm.translate("Auto", "自动"),
-                                               lm.translate("Fixed", "定速"),
-                                               lm.translate("Curve", "调速")],
-                                      selection: Binding(
+                SegmentedModePicker(titles: [lm.translate("Auto", "自动"),
+                                             lm.translate("Fixed", "定速"),
+                                             lm.translate("Curve", "调速")],
+                                    selection: Binding(
                     get: {
                         if !isManual { return 0 }
                         return curveStore.subMode(for: fan.index) == .curve ? 2 : 1
@@ -719,7 +719,6 @@ struct TemperatureView: View {
                         }
                     }
                 ))
-                .frame(width: 138)
 
                 Spacer()
 
