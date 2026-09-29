@@ -721,7 +721,7 @@ struct TemperatureView: View {
                     Text(lm.translate("Curve", "调速")).tag(2)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 180)
+                .fixedSize()
 
                 Spacer()
 
