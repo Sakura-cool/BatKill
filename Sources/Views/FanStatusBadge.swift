@@ -54,6 +54,6 @@ struct FanStatusBadge: View {
         .padding(.vertical, 1)
         .background(color.opacity(0.12))
         .cornerRadius(4)
-        .frame(minWidth: 76, alignment: .leading)
+        .frame(width: 92, alignment: .leading)
     }
 }

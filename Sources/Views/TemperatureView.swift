@@ -680,7 +680,8 @@ struct TemperatureView: View {
             HStack(spacing: 8) {
                 Text(fan.name)
                     .font(.caption).fontWeight(.medium)
-                    .frame(width: 80, alignment: .leading)
+                    .lineLimit(1)
+                    .fixedSize()
 
                 // Mode segmented picker: 自动 | 定速 | 调速.
                 Picker("", selection: Binding(
@@ -734,6 +735,7 @@ struct TemperatureView: View {
                                currentSpeed: fan.currentSpeed,
                                lm: lm)
             }
+            .frame(maxWidth: .infinity)
 
             if isManual && !hardwareMonitor.thermalThrottled {
                 if curveStore.subMode(for: fan.index) == .curve {
