@@ -72,6 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// update check / install is in progress.
     private weak var titleBarVersionButton: NSButton?
 
+    /// Title-bar "?" help button (shows the built-in usage guide).
+    private weak var titleBarHelpButton: NSButton?
+
     /// True during a manual update check or install; further title-bar
     /// version clicks are ignored until the flow finishes.
     private var isManualUpdateInFlight = false
@@ -256,9 +259,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Adds a title-bar accessory next to the window-traffic-light buttons
-    /// showing "BatKill" plus a tappable version label ("v0.1.6"). Clicking
-    /// the version runs a manual update check: download+install if a newer
-    /// version exists, otherwise an up-to-date alert.
+    /// showing "BatKill" plus a tappable version label ("v0.1.6") and a
+    /// "?" help button. Clicking the version runs a manual update check;
+    /// clicking "?" shows the built-in usage guide.
     private func installTitleBarVersionAccessory(on window: NSWindow) {
         // Hide the system-rendered title text; the accessory below renders
         // "BatKill vX.X.X" next to the traffic-light buttons instead.
@@ -280,25 +283,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         versionButton.sizeToFit()
         titleBarVersionButton = versionButton
 
+        let helpButton = NSButton(title: "?",
+                                  target: self,
+                                  action: #selector(titleBarHelpClicked))
+        helpButton.isBordered = false
+        helpButton.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        helpButton.contentTintColor = .secondaryLabelColor
+        helpButton.toolTip = localizationManager.translate("Usage guide", "使用说明书")
+        helpButton.bezelStyle = .inline
+        helpButton.sizeToFit()
+        titleBarHelpButton = helpButton
+        titleBarHelpButton = helpButton
+
         // Height matches the standard title bar (~28pt) so the content
         // vertically centers against the traffic-light buttons.
         let leadingInset: CGFloat = 6
         let containerH: CGFloat = 28
         let container = NSView(
             frame: NSRect(x: 0, y: 0,
-                          width: leadingInset + nameLabel.frame.width + 8 + versionButton.frame.width,
+                          width: leadingInset + nameLabel.frame.width + 8 + versionButton.frame.width + 8 + helpButton.frame.width,
                           height: containerH))
         nameLabel.frame.origin = NSPoint(x: leadingInset,
                                          y: (containerH - nameLabel.frame.height) / 2)
         versionButton.frame.origin = NSPoint(x: nameLabel.frame.maxX + 8,
                                              y: (containerH - versionButton.frame.height) / 2)
+        helpButton.frame.origin = NSPoint(x: versionButton.frame.maxX + 8,
+                                          y: (containerH - helpButton.frame.height) / 2)
         container.addSubview(nameLabel)
         container.addSubview(versionButton)
+        container.addSubview(helpButton)
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.layoutAttribute = .leading
         accessory.view = container
         window.addTitlebarAccessoryViewController(accessory)
+    }
+
+    /// Shows the built-in usage guide in a modal alert. Content mirrors
+    /// docs/USAGE.md minus the installation section (the app is already
+    /// installed when this is reachable).
+    @objc private func titleBarHelpClicked() {
+        let alert = NSAlert()
+        alert.messageText = localizationManager.translate("BatKill Usage Guide", "BatKill 使用说明书")
+        alert.informativeText = usageGuideText()
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: localizationManager.translate("OK", "知道了"))
+        if let win = settingsWindow {
+            alert.beginSheetModal(for: win)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    /// Compact usage-guide body (no install steps; the app is running).
+    private func usageGuideText() -> String {
+        localizationManager.translate(
+            "Battery saver:\n"
+            + "1. Click the menu-bar battery icon → Settings\n"
+            + "2. Tick apps to auto-stop on battery\n"
+            + "3. Unplug → apps close after 30s; replug → they restore\n\n"
+            + "Fan control:\n"
+            + "1. Open the temperature window\n"
+            + "2. First use: tap Enable Fan Control, enter admin password once\n"
+            + "3. Per fan pick Auto / Fixed / Curve\n"
+            + "   - Auto: system-managed\n"
+            + "   - Fixed: drag the slider (applies after 0.1s)\n"
+            + "   - Curve: edit nodes on the chart (applies after 0.1s)\n"
+            + "4. Status badge next to the picker shows 已生效/生效中\n\n"
+            + "Presets:\n"
+            + "Save the current layout, apply or delete saved presets.\n\n"
+            + "Threshold guard:\n"
+            + "Set 60-120°C; above it fans return to system control.",
+            "电池省电：\n"
+            + "1. 点菜单栏电池图标 → 设置\n"
+            + "2. 勾选电池供电时自动停止的软件\n"
+            + "3. 拔电源 → 30 秒后自动关闭；插回 → 自动恢复\n\n"
+            + "风扇控制：\n"
+            + "1. 打开温度窗口\n"
+            + "2. 首次使用：点「启用风扇控制」并输入一次管理员密码\n"
+            + "3. 每把风扇可选 自动 / 定速 / 调速\n"
+            + "   - 自动：交还系统控制\n"
+            + "   - 定速：拖动滑块（0.1 秒后生效）\n"
+            + "   - 调速：编辑曲线节点（0.1 秒后生效）\n"
+            + "4. 模式行状态徽标显示「已生效/生效中」\n\n"
+            + "预设：\n"
+            + "保存当前布局，一键应用或删除预设。\n\n"
+            + "温度阈值保护：\n"
+            + "设置 60-120°C，超过后风扇自动交还系统。"
+        )
     }
 
     /// Manual update check triggered by tapping the title-bar version label.
