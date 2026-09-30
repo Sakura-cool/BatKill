@@ -259,18 +259,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Adds a title-bar accessory next to the window-traffic-light buttons
-    /// showing "BatKill" plus a tappable version label ("v0.1.6") and a
-    /// "?" help button. Clicking the version runs a manual update check;
-    /// clicking "?" shows the built-in usage guide.
+    /// showing a tappable "BatKill" name button plus a version label
+    /// ("v0.1.6") and a "?" help button. Clicking the name opens the GitHub
+    /// repository; clicking the version runs a manual update check; clicking
+    /// "?" shows the built-in usage guide.
     private func installTitleBarVersionAccessory(on window: NSWindow) {
         // Hide the system-rendered title text; the accessory below renders
         // "BatKill vX.X.X" next to the traffic-light buttons instead.
         window.titleVisibility = .hidden
 
-        let nameLabel = NSTextField(labelWithString: "BatKill")
-        nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        nameLabel.textColor = .labelColor
-        nameLabel.sizeToFit()
+        let nameButton = NSButton(title: "BatKill",
+                                  target: self,
+                                  action: #selector(titleBarNameClicked))
+        nameButton.isBordered = false
+        nameButton.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        nameButton.contentTintColor = .labelColor
+        nameButton.toolTip = localizationManager.translate(
+            "Open GitHub repository", "打开 GitHub 仓库")
+        nameButton.sizeToFit()
 
         let versionButton = NSButton(title: "v\(versionChecker.currentVersion)",
                                      target: self,
@@ -302,15 +308,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let containerH: CGFloat = 28
         let container = NSView(
             frame: NSRect(x: 0, y: 0,
-                          width: leadingInset + nameLabel.frame.width + 8 + versionButton.frame.width + 8 + helpButton.frame.width,
+                          width: leadingInset + nameButton.frame.width + 8 + versionButton.frame.width + 8 + helpButton.frame.width,
                           height: containerH))
-        nameLabel.frame.origin = NSPoint(x: leadingInset,
-                                         y: (containerH - nameLabel.frame.height) / 2)
-        versionButton.frame.origin = NSPoint(x: nameLabel.frame.maxX + 8,
-                                             y: (containerH - versionButton.frame.height) / 2)
+        nameButton.frame.origin = NSPoint(x: leadingInset,
+                                          y: (containerH - nameButton.frame.height) / 2)
+        versionButton.frame.origin = NSPoint(x: nameButton.frame.maxX + 8,
+                                              y: (containerH - versionButton.frame.height) / 2)
         helpButton.frame.origin = NSPoint(x: versionButton.frame.maxX + 8,
                                           y: (containerH - helpButton.frame.height) / 2)
-        container.addSubview(nameLabel)
+        container.addSubview(nameButton)
         container.addSubview(versionButton)
         container.addSubview(helpButton)
 
@@ -372,6 +378,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             + "温度阈值保护：\n"
             + "设置 60-120°C，超过后风扇自动交还系统。"
         )
+    }
+
+    /// Opens the project's GitHub repository in the default browser when the
+    /// title-bar app name is clicked.
+    @objc private func titleBarNameClicked() {
+        guard let url = URL(string: "https://github.com/Sakura-cool/BatKill") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Manual update check triggered by tapping the title-bar version label.
