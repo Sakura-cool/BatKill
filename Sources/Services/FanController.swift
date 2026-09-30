@@ -138,7 +138,7 @@ extension HardwareMonitor {
             completion(false)
             return
         }
-        let target = clampFanSpeed(speed, min: fan.minSpeed, max: fan.maxSpeed)
+        let target = clampFanSpeed(speed, min: 0, max: fan.maxSpeed)
         if target != speed {
             logger("FanController: 转速 \(Int(speed)) 超出范围 "
                 + "[\(Int(fan.minSpeed)), \(Int(fan.maxSpeed))]，已收敛为 \(Int(target))")

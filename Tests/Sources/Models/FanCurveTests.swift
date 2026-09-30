@@ -36,6 +36,8 @@ final class FanCurveTests: TestCase {
         testCurveCodableRoundTrip()
         testStorePersistence()
         testStoreSubModeFallback()
+        testSystemDefaultRamp()
+        testDefaultCurveOnDemand()
     }
 
     // MARK: - Curve Construction
@@ -187,19 +189,23 @@ final class FanCurveTests: TestCase {
     // MARK: - System Default Curve & Smoothing
 
     func testSystemDefaultRamp() {
-        runTest("systemDefault ramps min → max across steps") {
+        runTest("systemDefault ramps 0 → max across steps") {
             let curve = FanCurve.systemDefault(threshold: 100, minSpeed: 500, maxSpeed: 2500)
-            XCTAssertEqual(Int(curve.stepSpeeds[0] ?? -1), 500)
+            XCTAssertEqual(Int(curve.stepSpeeds[0] ?? -1), 0, "starts from 0 RPM")
             XCTAssertEqual(Int(curve.stepSpeeds[10] ?? -1), 2500, "last step = maxSpeed")
             XCTAssertTrue(curve.isMonotonic)
         }
     }
 
     func testDefaultCurveOnDemand() {
+        // TestRunner 的 setUp/tearDown 是类级调用一次，而非每个方法；
+        // 前面的 testStorePersistence 会写入 fanCurves，这里需先清理以避免残留污染。
+        UserDefaults.standard.removeObject(forKey: "fanCurves")
+        UserDefaults.standard.removeObject(forKey: "fanManualSubModes")
         runTest("curve(for:) creates system default on first access") {
             let store = FanCurveStore()
             let curve = store.curve(for: 0, minSpeed: 600, maxSpeed: 3000)
-            XCTAssertEqual(Int(curve.stepSpeeds[0] ?? -1), 600)
+            XCTAssertEqual(Int(curve.stepSpeeds[0] ?? -1), 0, "starts from 0 RPM")
             XCTAssertEqual(Int(curve.stepSpeeds[FanCurve.maxStepIndex(for: curve.threshold)] ?? -1), 3000)
         }
     }

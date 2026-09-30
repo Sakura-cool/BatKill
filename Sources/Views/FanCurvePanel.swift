@@ -57,7 +57,7 @@ struct FanCurvePanel: View {
     }
 
     private var currentCurve: FanCurve {
-        curveStore.curve(for: fan.index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
+        curveStore.curve(for: fan.index, minSpeed: 0, maxSpeed: fan.maxSpeed)
     }
 
     private func header(for curve: FanCurve) -> some View {
@@ -67,7 +67,7 @@ struct FanCurvePanel: View {
                 .foregroundColor(.secondary)
             Spacer()
             Text("\(Int(FanCurve.temperature(atStep: 0, threshold: curve.threshold)))°C" +
-                    " — \(Int(curve.threshold))°C  ·  \(Int(fan.minSpeed))~\(Int(fan.maxSpeed)) RPM")
+                    " — \(Int(curve.threshold))°C  ·  0~\(Int(fan.maxSpeed)) RPM")
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(.secondary)
         }
@@ -296,7 +296,7 @@ struct FanCurvePanel: View {
             return
         }
         var updated = currentCurve
-        updated.stepSpeeds[step] = min(max(value, fan.minSpeed), fan.maxSpeed)
+        updated.stepSpeeds[step] = min(max(value, 0), fan.maxSpeed)
         curveStore.storeCurveRaw(updated, for: fan.index)   // per-step independent
         editingStep = nil
         editText = ""
@@ -327,9 +327,9 @@ struct FanCurvePanel: View {
     /// instead of a dense 0–maxSpeed grid.
     private func chartBounds(for curve: FanCurve) -> (minY: Double, maxY: Double) {
         let speeds = curve.stepSpeeds.values
-        let rawMin = speeds.min() ?? fan.minSpeed
+        let rawMin = speeds.min() ?? 0
         let rawMax = speeds.max() ?? fan.maxSpeed
-        let lo = max(fan.minSpeed, floor((rawMin - 100) / 100) * 100)
+        let lo = max(0, floor((rawMin - 100) / 100) * 100)
         var hi = min(fan.maxSpeed, ceil((rawMax + 100) / 100) * 100)
         if hi - lo < 200 { hi = lo + 200 }
         return (lo, hi)
@@ -370,7 +370,7 @@ struct FanCurvePanel: View {
                 editingStep = nil   // dismiss any inline editor while dragging
                 let newSpeed = min(max(speedFor(y: value.location.y,
                                                 plot: plot, bounds: bounds),
-                                       fan.minSpeed),
+                                       0),
                                    fan.maxSpeed)
                 var updated = curve
                 updated.stepSpeeds[step] = newSpeed

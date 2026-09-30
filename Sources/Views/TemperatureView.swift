@@ -901,7 +901,7 @@ struct TemperatureView: View {
             autoModes[fan.index] = !(fanManualModes[fan.index] ?? false)
             if mode == .curve {
                 curves[fan.index] = curveStore.curve(for: fan.index,
-                                                     minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
+                                                     minSpeed: 0, maxSpeed: fan.maxSpeed)
             }
         }
         return SavePresetSheet(
@@ -929,7 +929,7 @@ struct TemperatureView: View {
                 subModes[fan.index] = mode
                 if mode == .curve {
                     curves[fan.index] = curveStore.curve(for: fan.index,
-                                                         minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
+                                                         minSpeed: 0, maxSpeed: fan.maxSpeed)
                 }
             }
         }

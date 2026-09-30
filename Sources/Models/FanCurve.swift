@@ -66,16 +66,16 @@ struct FanCurve: Codable, Equatable {
         }
     }
 
-    /// System default curve: a linear ramp from `minSpeed` at 0 °C up to
-    /// `maxSpeed` at the threshold. Used when the user has not customized
-    /// the curve (default after switching to 调速).
+    /// System default curve: a linear ramp from 0 RPM at 0 °C up to
+    /// `maxSpeed` at the threshold (CHANGE-037). Used when the user has not
+    /// customized the curve (default after switching to 调速).
     static func systemDefault(threshold: Double, minSpeed: Double, maxSpeed: Double) -> FanCurve {
-        var curve = FanCurve(threshold: threshold, baseSpeed: minSpeed)
+        var curve = FanCurve(threshold: threshold, baseSpeed: 0)
         let maxStep = maxStepIndex(for: threshold)
-        let range = max(maxSpeed - minSpeed, 1)
+        let range = max(maxSpeed, 1)
         for k in 0...maxStep {
             let ratio = Double(k) / Double(maxStep)
-            curve.stepSpeeds[k] = minSpeed + range * ratio
+            curve.stepSpeeds[k] = range * ratio
         }
         return curve
     }
@@ -335,7 +335,7 @@ final class FanCurveStore: ObservableObject {
     /// Curve target speed for a fan at a given CPU temperature.
     /// Falls back to the fan's current speed when above the threshold.
     func targetSpeed(for index: Int, fan: FanInfo, maxTemp: Double) -> Double {
-        let curve = curve(for: index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
+        let curve = curve(for: index, minSpeed: 0, maxSpeed: fan.maxSpeed)
         if case .speed(let v) = curve.targetSpeed(for: maxTemp) {
             return v
         }
@@ -353,7 +353,7 @@ final class FanCurveStore: ObservableObject {
         guard hardwareMonitor.fanControlEnabled else { return }
         let temp = hardwareMonitor.maxCPUTemp
         guard subMode(for: fan.index) == .curve else { return }
-        let curve = curve(for: fan.index, minSpeed: fan.minSpeed, maxSpeed: fan.maxSpeed)
+        let curve = curve(for: fan.index, minSpeed: 0, maxSpeed: fan.maxSpeed)
 
         switch curve.targetSpeed(for: temp) {
         case .speed(let target):
