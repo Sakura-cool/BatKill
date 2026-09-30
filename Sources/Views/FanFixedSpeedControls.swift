@@ -11,7 +11,8 @@ import SwiftUI
 /// SwiftUI view rendering a fan's fixed-speed controls.
 struct FanFixedSpeedControls: View {
     let fan: FanInfo
-    let lm: LocalizationManager
+    /// Observed so Min/Max units refresh on language switch (CHANGE-038).
+    @ObservedObject var lm: LocalizationManager
     let hardwareMonitor: HardwareMonitor
 
     @Binding var pendingSpeed: Double
@@ -46,11 +47,11 @@ struct FanFixedSpeedControls: View {
             }
 
             HStack {
-                Text(lm.translate("Min: %d", "最小: %d", Int(fan.minSpeed)))
+                Text(lm.translate("Min: %d rpm", "最小: %d 转/分", Int(fan.minSpeed)))
                     .font(.caption2)
                     .foregroundColor(.secondary)
                 Spacer()
-                Text(lm.translate("Max: %d", "最大: %d", Int(fan.maxSpeed)))
+                Text(lm.translate("Max: %d rpm", "最大: %d 转/分", Int(fan.maxSpeed)))
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }

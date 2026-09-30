@@ -548,16 +548,20 @@ struct TemperatureView: View {
                         }
                         .buttonStyle(.plain)
 
-                        // Fan speed summary for this preset
-                        let desc = preset.fanSpeeds.keys.sorted().map { idx in
-                            if preset.fanAutoModes[idx] == true {
-                                return lm.translate("Auto", "自动")
+                        // Per-fan summary: colored mode badge + speed info so
+                        // the row shows fixed vs curve at a glance (CHANGE-038).
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(preset.fanSpeeds.keys.sorted(), id: \.self) { idx in
+                                PresetFanSummary(
+                                    fanName: fanNameForIndex(idx),
+                                    isAuto: preset.fanAutoModes[idx] == true,
+                                    subMode: preset.fanManualSubModes?[idx] ?? .fixed,
+                                    speed: preset.fanSpeeds[idx] ?? 0,
+                                    curve: preset.fanCurves?[idx],
+                                    lm: lm
+                                )
                             }
-                            return "\(Int(preset.fanSpeeds[idx] ?? 0))"
-                        }.joined(separator: " / ")
-                        Text(desc)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundColor(.secondary)
+                        }
 
                         Spacer()
 
@@ -722,7 +726,7 @@ struct TemperatureView: View {
 
                 Spacer()
 
-                Text(String(format: lm.translate("%d RPM", "%d 转/分"), Int(fan.currentSpeed)))
+                Text(String(format: lm.translate("%d rpm", "%d 转/分"), Int(fan.currentSpeed)))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1).fixedSize()
@@ -953,6 +957,12 @@ struct TemperatureView: View {
         if temp < 50 { return .green }
         if temp < 70 { return .orange }
         return .red
+    }
+
+    /// Fan display name by index (preset summaries), falling back to a
+    /// generic "Fan N" label when the fan is no longer present.
+    private func fanNameForIndex(_ index: Int) -> String {
+        hardwareMonitor.fans.first(where: { $0.index == index })?.name ?? "Fan \(index + 1)"
     }
 
     /// Creates a repeating timer that runs `partialRefresh()` (all sensors)

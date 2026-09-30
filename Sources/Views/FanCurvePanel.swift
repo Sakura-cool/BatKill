@@ -16,7 +16,9 @@ import SwiftUI
 struct FanCurvePanel: View {
     let fan: FanInfo
     let curveStore: FanCurveStore
-    let lm: LocalizationManager
+    /// Observed so the header boundary range and current-speed marker
+    /// refresh on language switch (CHANGE-038).
+    @ObservedObject var lm: LocalizationManager
     /// Called when the user taps "生效" with the target speed for the
     /// current CPU temperature. The parent performs the admin write.
     var onApplySpeed: ((Double) -> Void)?
@@ -67,7 +69,8 @@ struct FanCurvePanel: View {
                 .foregroundColor(.secondary)
             Spacer()
             Text("\(Int(FanCurve.temperature(atStep: 0, threshold: curve.threshold)))°C" +
-                    " — \(Int(curve.threshold))°C  ·  0~\(Int(fan.maxSpeed)) RPM")
+                    " — \(Int(curve.threshold))°C  ·  " +
+                    lm.translate("0~%d rpm", "0~%d 转/分", Int(fan.maxSpeed)))
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(.secondary)
         }
@@ -129,7 +132,7 @@ struct FanCurvePanel: View {
                         .frame(width: plot.x1 - plot.x0, height: 1.5)
                         .position(x: (plot.x0 + plot.x1) / 2,
                                   y: yFor(speed: fan.currentSpeed, plot: plot, bounds: bounds))
-                    Text("\(Int(fan.currentSpeed)) RPM")
+                    Text(lm.translate("%d rpm", "%d 转/分", Int(fan.currentSpeed)))
                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                         .foregroundColor(.red)
                         .padding(.horizontal, 3)
@@ -146,11 +149,11 @@ struct FanCurvePanel: View {
             // Action row: target readout + authorize (no explicit Apply
             // button — curve edits apply after a 0.1s debounce, CHANGE-018).
             HStack(spacing: 8) {
-                Text(lm.translate("Y: ×100 RPM", "Y 轴: ×100 转/分"))
+                Text(lm.translate("Y: ×100 rpm", "Y 轴: ×100 转/分"))
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(.secondary)
                 Spacer()
-                Text(lm.translate("Current %d °C → %d RPM", "当前 %d °C → %d 转/分",
+                Text(lm.translate("Current %d °C → %d rpm", "当前 %d °C → %d 转/分",
                                   Int(current), Int(targetSpeed)))
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.red)

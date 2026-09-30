@@ -17,7 +17,8 @@ struct FanStatusBadge: View {
     let isManual: Bool
     let target: Double?
     let currentSpeed: Double
-    let lm: LocalizationManager
+    /// Observed so the badge text refreshes on language switch (CHANGE-038).
+    @ObservedObject var lm: LocalizationManager
 
     private var converged: Bool {
         guard let target else { return false }
