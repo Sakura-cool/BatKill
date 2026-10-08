@@ -1,20 +1,22 @@
-//  SegmentedModePicker.swift
+//  CompactSegmentedPicker.swift
 //  BatKill
 //
-//  Compact fixed-width three-segment mode picker (CHANGE-036).
-//  Pure SwiftUI buttons in a rounded capsule: font and height match the
-//  fan-name label (caption, ~11pt) so the control sits inline with it
-//  instead of towering over it. Width is pinned, so switching modes and
-//  the 1s refresh never renegotiate the layout (no jitter, any language).
+//  Compact fixed-size segmented controls built from pure SwiftUI buttons in
+//  a rounded capsule. Fixed width/height keep the layout stable (no jitter
+//  in any language) and render identically on arm64 and x86_64 — unlike the
+//  built-in segmented Picker, whose metrics differ across architectures.
 
 import SwiftUI
 
-/// Compact three-segment picker: 自动 | 定速 | 调速.
-struct SegmentedModePicker: View {
+/// Generic compact segmented picker: N equal-width segments in a rounded
+/// capsule. The selected segment gets a subtle accent tint.
+struct CompactSegmentedPicker: View {
     /// Segment titles in display order.
     let titles: [String]
     /// Selected segment index (0-based).
     @Binding var selection: Int
+    /// Fixed total width.
+    let width: CGFloat
 
     var body: some View {
         HStack(spacing: 1) {
@@ -30,9 +32,7 @@ struct SegmentedModePicker: View {
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 4)
-                                .fill(selection == i
-                                    ? Color.accentColor.opacity(0.16)
-                                    : Color.clear)
+                                .fill(selection == i ? Color.accentColor.opacity(0.16) : Color.clear)
                                 .padding(1)
                         )
                         .contentShape(Rectangle())
@@ -41,7 +41,7 @@ struct SegmentedModePicker: View {
             }
         }
         .padding(2)
-        .frame(width: 128, height: 19)
+        .frame(width: width, height: 19)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color(NSColor.controlBackgroundColor))
@@ -51,5 +51,25 @@ struct SegmentedModePicker: View {
                 )
         )
         .fixedSize()
+    }
+}
+
+/// Compact two-segment language picker: English | 简体中文.
+struct LanguagePicker: View {
+    @Binding var selection: Language
+
+    var body: some View {
+        CompactSegmentedPicker(
+            titles: Language.allCases.map(\.displayName),
+            selection: Binding(
+                get: { Language.allCases.firstIndex(of: selection) ?? 0 },
+                set: { newValue in
+                    if Language.allCases.indices.contains(newValue) {
+                        selection = Language.allCases[newValue]
+                    }
+                }
+            ),
+            width: 100
+        )
     }
 }

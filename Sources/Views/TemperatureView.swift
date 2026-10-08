@@ -688,7 +688,7 @@ struct TemperatureView: View {
                     .fixedSize()
 
                 // Mode segmented picker: 自动 | 定速 | 调速.
-                SegmentedModePicker(titles: [lm.translate("Auto", "自动"),
+                CompactSegmentedPicker(titles: [lm.translate("Auto", "自动"),
                                              lm.translate("Fixed", "定速"),
                                              lm.translate("Curve", "调速")],
                                     selection: Binding(
@@ -722,7 +722,7 @@ struct TemperatureView: View {
                             hardwareMonitor.setFanModeWithAdmin(fanIndex: fan.index, auto: true) { _ in }
                         }
                     }
-                ))
+                ), width: 128)
 
                 Spacer()
 

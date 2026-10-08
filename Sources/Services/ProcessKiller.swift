@@ -92,8 +92,12 @@ final class ProcessKiller: ObservableObject {
 
     /// Restores only the selected apps that are in the pending restore list.
     /// Used by the UI's manual restore button for selective recovery.
-    func restoreSelected(_ apps: [AppItem], completion: (() -> Void)? = nil) {
-        let selectedPaths = Set(apps.filter { $0.isSelected }.map(\.id))
+    ///
+    /// - Parameter selectedPaths: the persisted selection (from `AppLister`),
+    ///   matched against the pending list so pending apps stay reachable even
+    ///   after they drop out of the live `apps` list. Apps that fail to
+    ///   restore are left in the pending list.
+    func restoreSelected(_ apps: [AppItem], selectedPaths: Set<String>, completion: (() -> Void)? = nil) {
         let toRestore = killedRestorePaths.filter { selectedPaths.contains($0) }
         guard !toRestore.isEmpty else {
             logger("restoreSelected: no selected apps in pending list")
@@ -106,17 +110,21 @@ final class ProcessKiller: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             var restoredNames: [String] = []
+            var restoredIds: [String] = []
 
             for appId in toRestore {
                 if let name = self.restoreSingleApp(appId, using: apps) {
                     restoredNames.append(name)
+                    restoredIds.append(appId)
                 }
             }
 
             DispatchQueue.main.async {
-                var paths = self.killedRestorePaths
-                paths.removeAll { toRestore.contains($0) }
-                self.killedRestorePaths = paths
+                if !restoredIds.isEmpty {
+                    var paths = self.killedRestorePaths
+                    paths.removeAll { restoredIds.contains($0) }
+                    self.killedRestorePaths = paths
+                }
                 self.restoreCount += restoredNames.count
                 self.isRestoring = false
                 if !restoredNames.isEmpty {
@@ -209,11 +217,13 @@ final class ProcessKiller: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             var restoredNames: [String] = []
+            var restoredIds: [String] = []
 
             for appId in paths {
                 let restoreCtx = ctx.child("restoreSingle")
                 if let name = self.restoreSingleApp(appId, using: apps) {
                     restoredNames.append(name)
+                    restoredIds.append(appId)
                     restoreCtx.log("恢复 \(name) 成功")
                 } else {
                     restoreCtx.log("恢复 \(appId) 失败")
@@ -223,7 +233,11 @@ final class ProcessKiller: ObservableObject {
             ctx.complete(success: true, extra: "\(restoredNames.count)/\(paths.count) 成功")
 
             DispatchQueue.main.async {
-                self.killedRestorePaths = []
+                if !restoredIds.isEmpty {
+                    var remaining = self.killedRestorePaths
+                    remaining.removeAll { restoredIds.contains($0) }
+                    self.killedRestorePaths = remaining
+                }
                 self.restoreCount += restoredNames.count
                 self.isRestoring = false
                 if !restoredNames.isEmpty {

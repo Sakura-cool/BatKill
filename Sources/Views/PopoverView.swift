@@ -46,14 +46,14 @@ struct PopoverView: View {
             // power-source icon trailing the text and the badge on the right
             HStack(spacing: 6) {
                 Circle()
-                    .fill(batteryMonitor.isOnBattery ? Color.orange : Color.green)
+                    .fill(batteryMonitor.isOnBattery ? Color.red : Color.green)
                     .frame(width: 8, height: 8)
                 Text(powerText)
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Image(systemName: batteryMonitor.isOnBattery ? "battery.25" : "powerplug.fill")
                     .font(.caption)
-                    .foregroundColor(batteryMonitor.isOnBattery ? .orange : .green)
+                    .foregroundColor(batteryMonitor.isOnBattery ? .red : .green)
                     .accessibilityLabel(batteryMonitor.isOnBattery ? lm.translate("Battery", "电池") : lm.translate("AC Power", "交流电"))
                 Spacer()
                 badgeView
@@ -76,19 +76,34 @@ struct PopoverView: View {
             }
 
             // ── Quick Action ──
-            // "Kill Now" button for immediate kill (only shown when there are selectable+running apps)
-            if appLister.apps.contains(where: { $0.isSelected && $0.isRunning }) {
-                Button {
+            // Toggles between "Kill Now" (stop selected running apps) and
+            // "Restore Now" (relaunch pending apps). The button stays in
+            // place and only swaps its label/action, so the popover layout
+            // never jumps. Disabled while a kill/restore is in flight to
+            // prevent rapid double-clicks.
+            Button {
+                if shouldRestore {
+                    processKiller.restoreKilledApps(using: appLister.apps) { appLister.refreshAppList() }
+                } else {
                     processKiller.killSelected(appLister.apps) { appLister.refreshAppList() }
-                } label: {
-                    Label(lm.translate("Kill Now", "立即停止"), systemImage: "bolt.fill")
-                        .font(.caption)
-                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .disabled(processKiller.isKilling)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: shouldRestore ? "arrow.clockwise" : "bolt.fill")
+                        .frame(width: 14, alignment: .center)
+                    Text(shouldRestore
+                        ? lm.translate("Restore Now", "立即恢复")
+                        : lm.translate("Kill Now", "立即停止"))
+                }
+                .font(.caption)
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .background(quickActionColor.opacity(quickActionDisabled ? 0.45 : 1.0))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
+            .buttonStyle(.plain)
+            .disabled(quickActionDisabled)
 
             // ── Status Info ──
             // Total app count and running count summary
@@ -104,19 +119,40 @@ struct PopoverView: View {
 
     /// Capsule-shaped badge in the top-right corner showing either the
     /// kill count (on battery) or the pending restore count (on AC).
+    /// Always occupies its slot (hidden via opacity at 0) so the popover
+    /// layout never jumps when the count changes.
     private var badgeView: some View {
-        let count = badgeCount
-        return Group {
-            if count > 0 {
-                Text("\(count)")
-                    .font(.title3).fontWeight(.bold)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 3)
-                    .background(batteryMonitor.isOnBattery ? Color.orange : Color.blue)
-                    .clipShape(Capsule())
-            }
-        }
+        Text("\(badgeCount)")
+            .font(.caption).fontWeight(.semibold)
+            .foregroundColor(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(batteryMonitor.isOnBattery ? Color.red : Color.green)
+            .clipShape(Capsule())
+            .opacity(badgeCount > 0 ? 1 : 0)
+    }
+
+    // MARK: - Quick Action State
+
+    /// Whether the quick-action button should restore pending apps (true)
+    /// or kill selected running apps (false).
+    private var shouldRestore: Bool {
+        processKiller.pendingRestoreCount > 0
+    }
+
+    /// Whether the quick-action button should be disabled: while a
+    /// kill/restore is in flight (debounce), or when there is no
+    /// actionable target for the current mode.
+    private var quickActionDisabled: Bool {
+        if processKiller.isKilling || processKiller.isRestoring { return true }
+        if shouldRestore { return false }
+        return !appLister.apps.contains(where: { $0.isSelected && $0.isRunning })
+    }
+
+    /// Fill color for the quick-action button: red for "Kill Now", green
+    /// for "Restore Now".
+    private var quickActionColor: Color {
+        shouldRestore ? .green : .red
     }
 
     // MARK: - Computed Values

@@ -48,6 +48,12 @@ final class AppLister: ObservableObject {
         set { UserDefaults.standard.set(Array(newValue), forKey: selectedPathsKey) }
     }
 
+    /// Read-only snapshot of the persisted selection (app paths). Exposed so
+    /// the restore flow can match pending apps even after they have dropped
+    /// out of the live `apps` list (e.g. non-standard-path apps that are only
+    /// discovered while running).
+    var selectedAppPaths: Set<String> { selectedPaths }
+
     // MARK: - Public API
 
     /// Triggers a full background scan of all app categories.

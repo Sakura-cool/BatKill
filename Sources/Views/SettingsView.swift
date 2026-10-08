@@ -358,15 +358,21 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 // Refresh app list
                 Button { appLister.refreshAppList() } label: {
-                    Label(lm.translate("Refresh", "刷新"), systemImage: "arrow.clockwise")
+                    HStack(spacing: 4) {
+                        Group {
+                            if appLister.isLoading {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                        .frame(width: 14, alignment: .center)
+                        Text(lm.translate("Refresh", "刷新"))
+                    }
+                    .font(.caption)
                 }
                 .buttonStyle(.borderless)
-                .font(.caption)
                 .disabled(appLister.isLoading)
-
-                if appLister.isLoading {
-                    ProgressView().controlSize(.small).frame(width: 12)
-                }
 
                 // Selected / Pending counts with sheet triggers
                 let selectedCount = appLister.apps.filter(\.isSelected).count
@@ -416,7 +422,7 @@ struct SettingsView: View {
                           || !appLister.apps.contains(where: { $0.isSelected && $0.isRunning }))
 
                 // Restore Selected -- restarts previously killed apps
-                Button { processKiller.restoreSelected(appLister.apps) { appLister.refreshAppList() } } label: {
+                Button { processKiller.restoreSelected(appLister.apps, selectedPaths: appLister.selectedAppPaths) { appLister.refreshAppList() } } label: {
                     Label(lm.translate("Restore Selected", "恢复选中"), systemImage: "arrow.clockwise")
                         .font(.caption)
                 }
@@ -436,17 +442,9 @@ struct SettingsView: View {
 
             // Bottom row: language + auto-start + update
             HStack(spacing: 8) {
-                // Language segmented picker (same height as the Auto-start
-                // label below: mini size trimmed ~1/5 to match it visually)
-                Picker("", selection: $lm.currentLanguage) {
-                    ForEach(Language.allCases, id: \.self) { lang in
-                        Text(lang.displayName).tag(lang)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .controlSize(.mini)
-                .font(.caption)
-                .frame(height: 15)
+                // Language segmented picker (fixed-size pure-SwiftUI control
+                // so it renders identically on arm64 and x86_64)
+                LanguagePicker(selection: $lm.currentLanguage)
 
                 Spacer()
 
