@@ -47,6 +47,8 @@ bash build.sh --dmg              # 编译 + DMG 打包
 # 输出 .package/arm64/BatKill-arm64.dmg
 ```
 
+> **打包分工**：发布产物以 CI（GitHub Actions，`v*` tag 触发）为准；本地 `build.sh --dmg` 仅用于当前平台调试/适配验证（见共享工程规范「构建与打包分工」）。
+
 ## 使用说明
 
 1. 启动 BatKill — 菜单栏出现电池图标
