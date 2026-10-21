@@ -1,7 +1,7 @@
 # BatKill — 项目知识库
 
-**更新日期:** 2026-10-08
-**版本:** v0.2.2
+**更新日期:** 2026-10-21
+**版本:** v0.2.2（v0.2.3 开发中：CHANGE-047~048「温度界面刷新间隔」，软件版本号发布时升 0.2.3）
 **技术栈:** Swift 5 / SwiftUI / AppKit / IOKit / Combine / AuthorizationServices
 **目标系统:** macOS 14.0+ (arm64 + x86_64)
 **Bundle ID:** com.batkill.app
@@ -22,6 +22,7 @@
 - **风扇控制** — 查看风扇转速，手动调节转速或切换自动/手动模式（0-1200 RPM 步进 100，1200+ 步进 1）
 - **风扇预设** — 保存/加载/删除风扇配置方案，内置「自动模式」预设，UserDefaults 持久化
 - **温度阈值保护** — 可设置 CPU 温度阈值（60-120°C），超过后自动将风扇交还系统控制
+- **温度刷新间隔** — 温度窗口内设置「整轮刷新秒数」（1-9 整数，默认 6）：输入即生效；**仅窗口打开期间生效**，关闭窗口即恢复程序默认（电池感知）刷新值；再次打开自动按持久化值生效（key `temperatureRefreshSeconds`，v0.2.3）
 - **过温守护** — 超过阈值时锁定手动模式，已授权时自动恢复风扇自动模式
 - **动态 CPU 命名** — 通过 sysctl 获取核心拓扑，自动分配 P-Core/E-Core 标签
 - **系统信息** — 显示 CPU 型号、内存容量、磁盘容量
@@ -46,7 +47,8 @@ BatKill/
 │   │   ├── AppItem.swift              # AppItem、AppCategory
 │   │   ├── FanPreset.swift            # FanPreset、FanPresetStore
 │   │   ├── HardwareModels.swift       # 温度传感器、风扇信息、SMC 数据结构
-│   │   └── ThresholdStore.swift       # 温度阈值持久化存储
+│   │   ├── ThresholdStore.swift       # 温度阈值持久化存储
+│   │   └── RefreshIntervalStore.swift # 温度刷新间隔持久化存储（1-9 秒，默认 6）
 │   ├── Services/                   # 业务逻辑层
 │   │   ├── BatteryMonitor.swift       # IOKit 电源状态监听
 │   │   ├── ProcessKiller.swift        # 终止/恢复应用、启动代理、后台服务
@@ -62,7 +64,10 @@ BatKill/
 │   │   ├── SelectedAppsSheet.swift    # 已选应用列表弹窗
 │   │   ├── PendingRestoreSheet.swift  # 待恢复应用列表弹窗
 │   │   ├── PopoverView.swift          # 菜单栏弹窗
-│   │   └── TemperatureView.swift      # 温度监控窗口
+│   │   ├── TemperatureView.swift      # 温度监控窗口
+│   │   ├── RefreshInterval.swift      # 刷新间隔策略（电池感知默认 + 整轮秒数→tick 换算）
+│   │   ├── RefreshIntervalSection.swift # 刷新间隔设置区块（v0.2.3）
+│   │   └── ThermalWarningBanner.swift   # 过温警告横幅（v0.2.3 由 TemperatureView 抽出）
 │   └── UI/                         # 系统级 UI
 │       └── MenuBarManager.swift       # NSStatusItem、角标渲染、右键菜单、通知面板
 ├── Tests/                          # 单元测试
@@ -75,7 +80,8 @@ BatKill/
 │   │   │   ├── AppItemTests.swift      # AppItem Codable 测试
 │   │   │   ├── FanPresetTests.swift    # FanPreset/FanPresetStore 测试
 │   │   │   ├── HardwareModelsTests.swift # 硬件模型测试
-│   │   │   └── ThresholdStoreTests.swift # 温度阈值测试
+│   │   │   ├── ThresholdStoreTests.swift # 温度阈值测试
+│   │   │   └── RefreshIntervalStoreTests.swift # 刷新间隔存储测试
 │   │   └── Services/
 │   │       └── LocalizationTests.swift # 国际化测试
 │   └── run_tests.sh                # 测试运行脚本
@@ -106,6 +112,7 @@ BatKill/
 | 管理员授权 | `Services/FanController.swift` | `requestAdminAuth()` |
 | SMC 连接 | `Services/HardwareMonitor.swift` | `open()` / `readKeyData()` / `writeBytes()` |
 | 温度窗口 | `Views/TemperatureView.swift` | `TemperatureView` (SwiftUI) |
+| 温度刷新间隔 | `Views/RefreshIntervalSection.swift` + `Models/RefreshIntervalStore.swift` | `TemperatureRefreshIntervalStore` / `refreshTickInterval` |
 | 风扇预设管理 | `Models/FanPreset.swift` | `FanPresetStore` (UserDefaults) |
 | 角标数字 | `App/AppDelegate.swift` | `refreshBadge()` |
 | 国际化文案 | `Services/LocalizationManager.swift` | `translate(_:_:)` / `loc(_:_:)` |
@@ -120,7 +127,7 @@ BatKill/
 - **文件日志** → `/tmp/batkill.log`，带时间戳
 - **零外部依赖** — 仅使用 Apple SDK
 - **国际化** — 英文 + 简体中文，所有面向用户的文案使用 `lm.translate(en, zh)`
-- **UserDefaults key**: `killedRestorePaths`, `selectedAppPaths`, `knownSystemPaths`, `autoKillEnabled`, `appLanguage`, `fanPresets`, `activeFanPresetId`, `cpuTemperatureBadge`, `temperatureThreshold`
+- **UserDefaults key**: `killedRestorePaths`, `selectedAppPaths`, `knownSystemPaths`, `autoKillEnabled`, `appLanguage`, `fanPresets`, `activeFanPresetId`, `cpuTemperatureBadge`, `temperatureThreshold`, `temperatureRefreshSeconds`
 - **电源动作队列** — 通过合并中间状态实现去抖 + 操作完成后冷却延时（30秒延迟），禁止内联调用
 - **管理员授权** — 通过 `AuthorizationServices` 实现一次性会话授权（`AuthorizationCreate` + `AuthorizationCopyRights`）
 - **SMC 写入** — 风扇转速 `fpe2` 类型需 ×4 写入；`flt` 类型使用 Float32 编码
@@ -129,9 +136,9 @@ BatKill/
 ## 单元测试
 
 - **测试框架** — 轻量级自定义框架（`Tests/Sources/Core/TestFramework.swift`），无需 XCTest
-- **测试范围** — 模型层（AppItem、FanPreset、HardwareModels、ThresholdStore）和基础工具（Extensions、Localization）
+- **测试范围** — 模型层（AppItem、FanPreset、HardwareModels、ThresholdStore、RefreshIntervalStore）、刷新间隔换算纯函数和基础工具（Extensions、Localization）
 - **运行命令** — `bash Tests/run_tests.sh`
-- **测试数量** — 160 个测试用例，覆盖 Codable 编解码、UserDefaults 持久化、枚举值、计算属性等
+- **测试数量** — 458 个测试用例（v0.2.3 新增 `RefreshIntervalStoreTests` 10 例 + `RefreshIntervalTests` 9 例），覆盖 Codable 编解码、UserDefaults 持久化、枚举值、计算属性等
 
 ## 反模式（禁止）
 

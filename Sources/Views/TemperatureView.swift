@@ -14,9 +14,10 @@
 //    2. Unavailable View  -- shown when SMC access fails (missing disk permission)
 //    3. Thermal Warning   -- red banner when CPU exceeds the temperature threshold
 //    4. Threshold Section -- configurable temperature threshold with stepper
-//    5. Temperature Groups -- collapsible P-Core / E-Core / other sensor groups
-//    6. Preset Section    -- save/load/delete fan presets
-//    7. Fan Control       -- per-fan auto/manual toggle, speed slider, admin auth
+//    5. Refresh Interval  -- configurable full-sweep duration (1-9 s, window-scoped)
+//    6. Temperature Groups -- collapsible P-Core / E-Core / other sensor groups
+//    7. Preset Section    -- save/load/delete fan presets
+//    8. Fan Control       -- per-fan auto/manual toggle, speed slider, admin auth
 //
 //  All hardware reads go through HardwareMonitor (SMC). Fan writes require
 //  admin privileges, obtained via AuthorizationServices.
@@ -46,8 +47,10 @@ struct TemperatureView: View {
     /// Persistent store for the temperature threshold setting.
     @StateObject private var thresholdStore = TemperatureThresholdStore()
 
-    /// Persistent store for per-fan manual sub-modes (fixed/curve) and
-    /// temperature-adaptive fan curves (v0.2.0).
+    /// Persistent store for the refresh interval setting (v0.2.3).
+    @StateObject private var refreshIntervalStore = TemperatureRefreshIntervalStore()
+
+    /// Persistent store for per-fan sub-modes and fan curves (v0.2.0).
     @StateObject private var curveStore = FanCurveStore()
 
     // MARK: - Local UI State
@@ -61,15 +64,13 @@ struct TemperatureView: View {
     /// Set of expanded temperature category groups in the accordion.
     @State private var expandedCategories: Set<TemperatureCategory> = []
 
-    /// Per-fan last-applied target speed (RPM), used to judge "已生效" when
-    /// the read-back converges to it within tolerance (CHANGE-022).
+    /// Per-fan last-applied target speed (RPM), used to judge "已生效" (CHANGE-022).
     @State private var fanTargetSpeeds: [Int: Double] = [:]
 
     /// Per-fan flags indicating admin authorization is needed before writing.
     @State private var fanNeedsAdmin: [Int: Bool] = [:]
 
-    /// Snapshot of fan states saved before thermal throttling, so they
-    /// can be restored when the CPU cools back below the threshold.
+    /// Fan states saved before thermal throttling, restored on cooldown.
     @State private var savedFanModes: [Int: Bool] = [:]
     @State private var savedFanSpeeds: [Int: Double] = [:]
 
@@ -108,6 +109,7 @@ struct TemperatureView: View {
                         if !hardwareMonitor.fans.isEmpty {
                             thresholdSection
                         }
+                        RefreshIntervalSection(store: refreshIntervalStore, lm: lm)
                         temperatureGroups
                         if !hardwareMonitor.fans.isEmpty {
                             ZStack {
@@ -191,6 +193,11 @@ struct TemperatureView: View {
             refreshTimer?.invalidate()
             refreshTimer = makeRefreshTimer(onBattery: onBattery)
         }
+        // Re-seed the timer when the user changes the interval (v0.2.3)
+        .onReceive(refreshIntervalStore.$seconds.dropFirst()) { _ in
+            refreshTimer?.invalidate()
+            refreshTimer = makeRefreshTimer(onBattery: hardwareMonitor.isRunningOnBattery)
+        }
     }
 
     // MARK: - Header
@@ -251,38 +258,15 @@ struct TemperatureView: View {
 
     // MARK: - Thermal Warning
 
-    /// Red banner displayed when CPU temperature exceeds the configured
-    /// threshold. Explains that fan control has been released to the system.
+    /// Red banner shown when the CPU exceeds the threshold.
     private var thermalWarningBanner: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.white)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(lm.translate(
-                    "CPU over \(Int(thresholdStore.threshold))°C — fan control released to system",
-                    "CPU 超过 \(Int(thresholdStore.threshold))°C — 风扇控制已交还系统"
-                ))
-                .font(.caption).fontWeight(.medium)
-                .foregroundColor(.white)
-                Text(lm.translate(
-                    "Current: \(String(format: "%.1f", hardwareMonitor.maxCPUTemp))°C",
-                    "当前: \(String(format: "%.1f", hardwareMonitor.maxCPUTemp))°C"
-                ))
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.8))
-            }
-            Spacer()
-        }
-        .padding(10)
-        .background(Color.red.opacity(0.85))
-        .cornerRadius(8)
+        ThermalWarningBanner(thresholdStore: thresholdStore, hardwareMonitor: hardwareMonitor, lm: lm)
     }
 
     // MARK: - Threshold Section
 
     /// Configurable temperature threshold with a stepper and direct input.
-    /// When CPU exceeds this value, fan control is automatically released
-    /// to the system for safety.
+    /// Exceeding it releases fan control to the system for safety.
     private var thresholdSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -305,7 +289,6 @@ struct TemperatureView: View {
                 Text(lm.translate("Threshold:", "阈值:"))
                     .font(.caption)
 
-                // Stepper with clamped range 60-120 degrees
                 Stepper(
                     value: Binding(
                         get: { thresholdStore.threshold },
@@ -782,9 +765,6 @@ struct TemperatureView: View {
     /// from the current CPU temperature and writes it on change. Skips writes
     /// when nothing changed, and hands control to the system when the
     /// temperature exceeds the curve threshold.
-    ///
-    /// Static because it runs from the refresh timer's escaping closure
-    /// (which captures stores weakly, not the SwiftUI view instance).
     private func applyCurveSpeed(for fan: FanInfo) {
         if hardwareMonitor.fanControlEnabled {
             let target = curveStore.targetSpeed(for: fan.index,
@@ -968,10 +948,17 @@ struct TemperatureView: View {
     /// Creates a repeating timer that runs `partialRefresh()` (all sensors)
     /// while the app is active, and `partialRefreshCPUAndGPU()` (CPU/GPU only)
     /// when the app is in background — reducing SMC kernel traps by ~50-70%
-    /// when the window is not frontmost. On close the timer is invalidated
-    /// so no SMC traffic occurs in the background.
+    /// when the window is not frontmost. The tick interval is derived from the
+    /// user's full-sweep setting (v0.2.3). On close the timer is invalidated,
+    /// which also restores the program's default refresh cadence because this
+    /// timer is the only consumer of that setting.
     private func makeRefreshTimer(onBattery: Bool) -> Timer {
-        let tick = hardwareRefreshInterval(onBattery: onBattery)
+        // User-configured full-sweep duration; falls back to the battery-aware
+        // default while the sensor key count is not known yet.
+        let tick = refreshTickInterval(cycleSeconds: Double(refreshIntervalStore.seconds),
+                                       sensorKeyCount: hardwareMonitor.validTempKeyCount,
+                                       batchSize: hardwareMonitor.partialBatchSize,
+                                       onBattery: onBattery)
         let timer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak hardwareMonitor, weak thresholdStore, weak curveStore] _ in
             guard let hardwareMonitor, let thresholdStore else { return }
             if NSApplication.shared.isActive {

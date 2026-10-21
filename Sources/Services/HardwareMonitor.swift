@@ -219,12 +219,24 @@ final class HardwareMonitor: ObservableObject {
     ///
     /// Falls back to a full `readTemperatures()` scan if the key cache has
     /// not been populated yet (first call after launch).
-    private var partialBatchSize: Int {
+
+    /// Number of temperature sensor keys read per timer tick. Larger batches
+    /// finish a full sweep in fewer ticks at the cost of a wider read burst.
+    /// Internal (not private) so `refreshTickInterval` can convert the user's
+    /// full-cycle setting into a per-tick interval (v0.2.3).
+    var partialBatchSize: Int {
         #if arch(arm64)
         return 2
         #else
         return 1
         #endif
+    }
+
+    /// Number of cached valid temperature sensor keys (0 until the first SMC
+    /// scan populates the cache). Used to convert the user's full-cycle refresh
+    /// setting into a per-tick interval (v0.2.3).
+    var validTempKeyCount: Int {
+        HardwareMonitor.validTempKeysCache?.count ?? 0
     }
 
     func partialRefresh(threshold: Double? = nil) {

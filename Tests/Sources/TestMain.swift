@@ -16,6 +16,8 @@ struct TestMain {
         TestRunner.register("FanPresetTests") { FanPresetTests() }
         TestRunner.register("FanCurveTests") { FanCurveTests() }
         TestRunner.register("ThresholdStoreTests") { ThresholdStoreTests() }
+        TestRunner.register("RefreshIntervalStoreTests") { RefreshIntervalStoreTests() }
+        TestRunner.register("RefreshIntervalTests") { RefreshIntervalTests() }
         TestRunner.register("HardwareModelsTests") { HardwareModelsTests() }
         TestRunner.register("LocalizationTests") { LocalizationTests() }
         TestRunner.register("ExtensionsTests") { ExtensionsTests() }
