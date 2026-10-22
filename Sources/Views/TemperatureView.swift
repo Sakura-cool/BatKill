@@ -86,9 +86,6 @@ struct TemperatureView: View {
     /// The preset targeted for deletion (shows confirmation alert).
     @State private var deleteTarget: FanPreset?
 
-    /// String representation of the threshold for the text field.
-    @State private var thresholdInput: String = ""
-
     // MARK: - Body
 
     var body: some View {
@@ -139,7 +136,6 @@ struct TemperatureView: View {
         .frame(width: 480, height: 600)
         .onAppear {
             // Initialize threshold input field
-            thresholdInput = "\(Int(thresholdStore.threshold))"
             hardwareMonitor.refresh()
             // Ensure the built-in "Auto Mode" preset exists
             presetStore.ensureAutoPreset(fanCount: hardwareMonitor.fans.count)
@@ -204,6 +200,17 @@ struct TemperatureView: View {
         // Re-seed the timer when the user changes the interval (v0.2.3)
         .onReceive(refreshIntervalStore.$seconds.dropFirst()) { _ in
             refreshTimer?.invalidate()
+            refreshTimer = makeRefreshTimer(onBattery: hardwareMonitor.isRunningOnBattery)
+        }
+
+        // The timer is built before the first SMC scan on a fresh launch, so
+        // the tick then falls back to the default cadence. Re-seed once the
+        // key cache is populated so the user's setting applies (BUG-009).
+        .onReceive(hardwareMonitor.$temperatures) { temps in
+            guard !temps.isEmpty, let timer = refreshTimer, timer.isValid else { return }
+            let tick = currentRefreshTick(onBattery: hardwareMonitor.isRunningOnBattery)
+            guard abs(timer.timeInterval - tick) > 0.01 else { return }
+            timer.invalidate()
             refreshTimer = makeRefreshTimer(onBattery: hardwareMonitor.isRunningOnBattery)
         }
     }
@@ -273,101 +280,12 @@ struct TemperatureView: View {
 
     // MARK: - Threshold Section
 
-    /// Configurable temperature threshold with a stepper and direct input.
-    /// Exceeding it releases fan control to the system for safety.
-    /// Inner content only — the shared settings card supplies the chrome.
-    private var thresholdSection: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 4) {
-                Image(systemName: "thermometer")
-                    .foregroundColor(.orange)
-                    .font(.system(size: 11.5))
-                Text(lm.translate("Fan Temperature Threshold", "风扇温度阈值"))
-                    .font(.system(size: 11.5, weight: .medium))
-                Spacer()
-            }
-
-            Text(lm.translate(
-                "When CPU exceeds this temperature, fan control is released to the system.",
-                "当 CPU 超过此温度时，风扇控制将交还系统。"
-            ))
-            .font(.system(size: 9))
-            .foregroundColor(.secondary)
-
-            HStack(spacing: 4) {
-                Text(lm.translate("Threshold:", "阈值:"))
-                    .font(.system(size: 10))
-
-                // Field and unit sit OUTSIDE the stepper: with an empty title the
-                // stepper renders only its arrows, so they can be scaled down
-                // without softening the 10pt field text (CHANGE-052/053).
-                HStack(spacing: 3) {
-                    TextField("60-120", text: $thresholdInput)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 9, design: .monospaced))
-                        .frame(width: 30)
-                        .multilineTextAlignment(.center)
-                        .onSubmit { applyThreshold() }
-                    Text("°C")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                    Stepper("", value: Binding(
-                        get: { thresholdStore.threshold },
-                        set: { newVal in
-                            let clamped = min(120, max(60, newVal))
-                            thresholdStore.threshold = clamped
-                            thresholdInput = "\(Int(clamped))"
-                        }
-                    ), in: 60...120, step: 1)
-                    .controlSize(.mini)
-                    .scaleEffect(0.8, anchor: .center)
-                }
-
-                // Explicit commit button flush right of the stepper (CHANGE-049)
-                Button(action: { applyThreshold() }, label: {
-                    Text(lm.translate("Apply", "应用"))
-                        .font(.system(size: 10))
-                })
-                .buttonStyle(.bordered)
-                .controlSize(.mini)
-                .frame(width: 44)
-
-                Spacer()
-
-                // Overheat danger warning
-                if hardwareMonitor.thermalThrottled {
-                    Text(lm.translate("Overheat Danger!", "过温危险!"))
-                        .font(.system(size: 10)).fontWeight(.bold)
-                        .foregroundColor(.red)
-                }
-
-                // Live CPU Die temperature indicator
-                let cpuTemp = hardwareMonitor.smoothedCPUTemp
-                HStack(spacing: 4) {
-                    Text(lm.translate("CPU Avg:", "CPU 均温:"))
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                    Text(String(format: "%.1f°C", cpuTemp))
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(cpuTemp >= thresholdStore.threshold ? .red : .primary)
-                    Circle()
-                        .fill(cpuTemp >= thresholdStore.threshold ? Color.red : Color.green)
-                        .frame(width: 6, height: 6)
-                }
-            }
-        }
+    /// Threshold half of the shared threshold+refresh card; its layout and
+    /// field state live in `ThresholdSection` (CHANGE-056).
+    private var thresholdSection: ThresholdSection {
+        ThresholdSection(monitor: hardwareMonitor, store: thresholdStore, lm: lm)
     }
 
-    /// Commits the threshold field: keeps digits only, clamps into 60-120,
-    /// persists, then re-syncs the field. Shared by the Enter key and the
-    /// "Apply" button (CHANGE-049).
-    private func applyThreshold() {
-        let digits = thresholdInput.filter(\.isNumber)
-        if let val = Int(digits) {
-            thresholdStore.threshold = Double(min(120, max(60, val)))
-        }
-        thresholdInput = "\(Int(thresholdStore.threshold))"
-    }
     // MARK: - Temperature Groups
 
     /// Collapsible accordion of temperature sensor groups (P-Core, E-Core,
@@ -963,20 +881,19 @@ struct TemperatureView: View {
         hardwareMonitor.fans.first(where: { $0.index == index })?.name ?? "Fan \(index + 1)"
     }
 
-    /// Creates a repeating timer that runs `partialRefresh()` (all sensors)
-    /// while the app is active, and `partialRefreshCPUAndGPU()` (CPU/GPU only)
-    /// when the app is in background — reducing SMC kernel traps by ~50-70%
-    /// when the window is not frontmost. The tick interval is derived from the
-    /// user's full-sweep setting (v0.2.3). On close the timer is invalidated,
-    /// which also restores the program's default refresh cadence because this
-    /// timer is the only consumer of that setting.
+    private func currentRefreshTick(onBattery: Bool) -> TimeInterval {
+        refreshTickInterval(cycleSeconds: Double(refreshIntervalStore.seconds),
+                                         sensorKeyCount: hardwareMonitor.validTempKeyCount,
+                                         batchSize: hardwareMonitor.partialBatchSize,
+                                         onBattery: onBattery)
+    }
+
+    /// Refresh timer: `partialRefresh()` while the app is active, CPU/GPU-only
+    /// in background (~50-70% fewer SMC traps when not frontmost); the tick
+    /// derives from the user's full-sweep setting (v0.2.3), and invalidating
+    /// this timer on close restores the program's default refresh cadence.
     private func makeRefreshTimer(onBattery: Bool) -> Timer {
-        // User-configured full-sweep duration; falls back to the battery-aware
-        // default while the sensor key count is not known yet.
-        let tick = refreshTickInterval(cycleSeconds: Double(refreshIntervalStore.seconds),
-                                       sensorKeyCount: hardwareMonitor.validTempKeyCount,
-                                       batchSize: hardwareMonitor.partialBatchSize,
-                                       onBattery: onBattery)
+        let tick = currentRefreshTick(onBattery: onBattery)
         let timer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak hardwareMonitor, weak thresholdStore, weak curveStore] _ in
             guard let hardwareMonitor, let thresholdStore else { return }
             if NSApplication.shared.isActive {

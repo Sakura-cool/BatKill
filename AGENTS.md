@@ -1,7 +1,7 @@
 # BatKill — 项目知识库
 
 **更新日期:** 2026-10-21
-**版本:** v0.2.2（v0.2.3 开发中：CHANGE-047~048「温度界面刷新间隔」，软件版本号发布时升 0.2.3）
+**版本:** v0.2.3（CHANGE-047~056：温度界面刷新间隔 + 视觉微调 + BUG-007~009 修复）
 **技术栈:** Swift 5 / SwiftUI / AppKit / IOKit / Combine / AuthorizationServices
 **目标系统:** macOS 14.0+ (arm64 + x86_64)
 **Bundle ID:** com.batkill.app

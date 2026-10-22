@@ -102,7 +102,7 @@ struct RefreshIntervalSection: View {
                 }
 
                 // Explicit commit button flush right of the stepper (CHANGE-049)
-                Button(action: { commit(intervalInput) }, label: {
+                Button(action: { submit() }, label: {
                     Text(lm.translate("Apply", "应用"))
                         .font(.system(size: 10))
                 })
@@ -150,7 +150,8 @@ struct RefreshIntervalSection: View {
         if intervalInput != display { intervalInput = display }
     }
 
-    /// Enter key: commit, or restore the effective value when the field is empty.
+    /// Enter key and the "Apply" button: commit, or resync the field to the
+    /// effective value when it holds no digits (BUG-008).
     private func submit() {
         if intervalInput.filter(\.isNumber).isEmpty {
             intervalInput = "\(store.seconds)"
