@@ -18,6 +18,9 @@
 //  `.controlSize(.mini)`; and the field is re-synced from the store so the
 //  stepper arrows visibly move the number.
 //
+//  CHANGE-052/053: the stepper keeps an empty title so only its arrows can be
+//  scaled down (`.scaleEffect(0.8)`); text then grew back by 1/4 (×1.25).
+//
 //  Scope: the value is only consumed by the temperature window's own refresh
 //  timer, so closing the window restores the program's default cadence.
 
@@ -57,9 +60,9 @@ struct RefreshIntervalSection: View {
             HStack(spacing: 4) {
                 Image(systemName: "clock.arrow.2.circlepath")
                     .foregroundColor(.cyan)
-                    .font(.system(size: 10))
+                    .font(.system(size: 12.5))
                 Text(lm.translate("Temperature Refresh Interval", "温度刷新间隔"))
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 12.5, weight: .medium))
                 Spacer()
             }
 
@@ -67,20 +70,20 @@ struct RefreshIntervalSection: View {
                 "Seconds for one full sensor sweep. Applies only while this window is open; the default cadence is restored after closing.",
                 "全部传感器刷新一轮所需秒数。仅在本窗口打开期间生效，关闭后恢复程序默认刷新速度。"
             ))
-            .font(.system(size: 8))
+            .font(.system(size: 10))
             .foregroundColor(.secondary)
 
             HStack(spacing: 4) {
                 Text(lm.translate("Cycle:", "间隔:"))
-                    .font(.system(size: 9))
+                    .font(.system(size: 11))
 
                 // Field and unit sit OUTSIDE the stepper: with an empty title the
                 // stepper renders only its arrows, so they can be scaled down
-                // without softening the 8pt field text (CHANGE-052).
+                // without softening the 10pt field text (CHANGE-052).
                 HStack(spacing: 3) {
                     TextField("1-9", text: $intervalInput)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 8, design: .monospaced))
+                        .font(.system(size: 10, design: .monospaced))
                         .frame(width: 30)
                         .multilineTextAlignment(.center)
                         .onChange(of: intervalInput) { _, newValue in
@@ -88,7 +91,7 @@ struct RefreshIntervalSection: View {
                         }
                         .onSubmit { submit() }
                     Text(lm.translate("sec", "秒"))
-                        .font(.system(size: 9))
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
                     Stepper("", value: Binding(
                         get: { Double(store.seconds) },
@@ -101,7 +104,7 @@ struct RefreshIntervalSection: View {
                 // Explicit commit button flush right of the stepper (CHANGE-049)
                 Button(action: { commit(intervalInput) }, label: {
                     Text(lm.translate("Apply", "应用"))
-                        .font(.system(size: 9))
+                        .font(.system(size: 11))
                 })
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
@@ -116,7 +119,7 @@ struct RefreshIntervalSection: View {
                         .fill(Color.green)
                         .frame(width: 6, height: 6)
                     Text(lm.translate("Active", "生效中"))
-                        .font(.system(size: 8))
+                        .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
             }
