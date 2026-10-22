@@ -298,31 +298,30 @@ struct TemperatureView: View {
                 Text(lm.translate("Threshold:", "阈值:"))
                     .font(.system(size: 9))
 
-                Stepper(
-                    value: Binding(
+                // Field and unit sit OUTSIDE the stepper: with an empty title the
+                // stepper renders only its arrows, so they can be scaled down
+                // without softening the 8pt field text (CHANGE-052).
+                HStack(spacing: 3) {
+                    TextField("60-120", text: $thresholdInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 8, design: .monospaced))
+                        .frame(width: 30)
+                        .multilineTextAlignment(.center)
+                        .onSubmit { applyThreshold() }
+                    Text("°C")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    Stepper("", value: Binding(
                         get: { thresholdStore.threshold },
                         set: { newVal in
                             let clamped = min(120, max(60, newVal))
                             thresholdStore.threshold = clamped
                             thresholdInput = "\(Int(clamped))"
                         }
-                    ),
-                    in: 60...120,
-                    step: 1
-                ) {
-                    HStack(spacing: 2) {
-                        TextField("60-120", text: $thresholdInput)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 8, design: .monospaced))
-                            .frame(width: 30)
-                            .multilineTextAlignment(.center)
-                            .onSubmit { applyThreshold() }
-                        Text("°C")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                    }
+                    ), in: 60...120, step: 1)
+                    .controlSize(.mini)
+                    .scaleEffect(0.8, anchor: .center)
                 }
-                .controlSize(.mini)
 
                 // Explicit commit button flush right of the stepper (CHANGE-049)
                 Button(action: { applyThreshold() }, label: {

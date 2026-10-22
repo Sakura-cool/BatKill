@@ -74,32 +74,29 @@ struct RefreshIntervalSection: View {
                 Text(lm.translate("Cycle:", "间隔:"))
                     .font(.system(size: 9))
 
-                // Stepper with clamped range 1-9 seconds, same control pattern
-                // as the threshold stepper.
-                Stepper(
-                    value: Binding(
+                // Field and unit sit OUTSIDE the stepper: with an empty title the
+                // stepper renders only its arrows, so they can be scaled down
+                // without softening the 8pt field text (CHANGE-052).
+                HStack(spacing: 3) {
+                    TextField("1-9", text: $intervalInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 8, design: .monospaced))
+                        .frame(width: 30)
+                        .multilineTextAlignment(.center)
+                        .onChange(of: intervalInput) { _, newValue in
+                            commit(newValue)
+                        }
+                        .onSubmit { submit() }
+                    Text(lm.translate("sec", "秒"))
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    Stepper("", value: Binding(
                         get: { Double(store.seconds) },
                         set: { store.set(seconds: Int($0)) }
-                    ),
-                    in: 1...9,
-                    step: 1
-                ) {
-                    HStack(spacing: 2) {
-                        TextField("1-9", text: $intervalInput)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 8, design: .monospaced))
-                            .frame(width: 30)
-                            .multilineTextAlignment(.center)
-                            .onChange(of: intervalInput) { _, newValue in
-                                commit(newValue)
-                            }
-                            .onSubmit { submit() }
-                        Text(lm.translate("sec", "秒"))
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                    }
+                    ), in: 1...9, step: 1)
+                    .controlSize(.mini)
+                    .scaleEffect(0.8, anchor: .center)
                 }
-                .controlSize(.mini)
 
                 // Explicit commit button flush right of the stepper (CHANGE-049)
                 Button(action: { commit(intervalInput) }, label: {
