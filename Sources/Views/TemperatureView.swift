@@ -102,14 +102,19 @@ struct TemperatureView: View {
                 unavailableView
             } else {
                 ScrollView {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 8) {
                         if hardwareMonitor.thermalThrottled {
                             thermalWarningBanner
                         }
-                        if !hardwareMonitor.fans.isEmpty {
-                            thresholdSection
+                        // Threshold + refresh interval are one tight settings group:
+                        // 4pt (the app's standard spacing unit) instead of the 8pt
+                        // card gap, so the two numeric rows read as a single block.
+                        VStack(spacing: 4) {
+                            if !hardwareMonitor.fans.isEmpty {
+                                thresholdSection
+                            }
+                            RefreshIntervalSection(store: refreshIntervalStore, lm: lm)
                         }
-                        RefreshIntervalSection(store: refreshIntervalStore, lm: lm)
                         temperatureGroups
                         if !hardwareMonitor.fans.isEmpty {
                             ZStack {
@@ -268,13 +273,13 @@ struct TemperatureView: View {
     /// Configurable temperature threshold with a stepper and direct input.
     /// Exceeding it releases fan control to the system for safety.
     private var thresholdSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: "thermometer")
                     .foregroundColor(.orange)
-                    .font(.caption)
+                    .font(.system(size: 10))
                 Text(lm.translate("Fan Temperature Threshold", "风扇温度阈值"))
-                    .font(.subheadline).fontWeight(.medium)
+                    .font(.system(size: 10, weight: .medium))
                 Spacer()
             }
 
@@ -282,12 +287,12 @@ struct TemperatureView: View {
                 "When CPU exceeds this temperature, fan control is released to the system.",
                 "当 CPU 超过此温度时，风扇控制将交还系统。"
             ))
-            .font(.caption2)
+            .font(.system(size: 8))
             .foregroundColor(.secondary)
 
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 Text(lm.translate("Threshold:", "阈值:"))
-                    .font(.caption)
+                    .font(.system(size: 9))
 
                 Stepper(
                     value: Binding(
@@ -302,31 +307,33 @@ struct TemperatureView: View {
                     step: 1
                 ) {
                     HStack(spacing: 2) {
-                                    TextField("60-120", text: $thresholdInput)
+                        TextField("60-120", text: $thresholdInput)
                             .textFieldStyle(.roundedBorder)
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(width: 36)
+                            .font(.system(size: 8, design: .monospaced))
+                            .frame(width: 30)
                             .multilineTextAlignment(.center)
-                            .onSubmit {
-                                let digits = thresholdInput.filter(\.isNumber)
-                                if let val = Int(digits) {
-                                    let clamped = min(120, max(60, val))
-                                    thresholdStore.threshold = Double(clamped)
-                                }
-                                thresholdInput = "\(Int(thresholdStore.threshold))"
-                            }
+                            .onSubmit { applyThreshold() }
                         Text("°C")
-                            .font(.caption)
+                            .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }
                 }
+
+                // Explicit commit button flush right of the stepper (CHANGE-049)
+                Button(action: { applyThreshold() }, label: {
+                    Text(lm.translate("Apply", "应用"))
+                        .font(.system(size: 9))
+                })
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .frame(width: 44)
 
                 Spacer()
 
                 // Overheat danger warning
                 if hardwareMonitor.thermalThrottled {
                     Text(lm.translate("Overheat Danger!", "过温危险!"))
-                        .font(.caption).fontWeight(.bold)
+                        .font(.system(size: 9)).fontWeight(.bold)
                         .foregroundColor(.red)
                 }
 
@@ -334,10 +341,10 @@ struct TemperatureView: View {
                 let cpuTemp = hardwareMonitor.smoothedCPUTemp
                 HStack(spacing: 4) {
                     Text(lm.translate("CPU Avg:", "CPU 均温:"))
-                        .font(.caption2)
+                        .font(.system(size: 8))
                         .foregroundColor(.secondary)
                     Text(String(format: "%.1f°C", cpuTemp))
-                        .font(.system(.caption2, design: .monospaced))
+                        .font(.system(size: 8, design: .monospaced))
                         .foregroundColor(cpuTemp >= thresholdStore.threshold ? .red : .primary)
                     Circle()
                         .fill(cpuTemp >= thresholdStore.threshold ? Color.red : Color.green)
@@ -345,11 +352,21 @@ struct TemperatureView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(8)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
     }
 
+    /// Commits the threshold field: keeps digits only, clamps into 60-120,
+    /// persists, then re-syncs the field. Shared by the Enter key and the
+    /// "Apply" button (CHANGE-049).
+    private func applyThreshold() {
+        let digits = thresholdInput.filter(\.isNumber)
+        if let val = Int(digits) {
+            thresholdStore.threshold = Double(min(120, max(60, val)))
+        }
+        thresholdInput = "\(Int(thresholdStore.threshold))"
+    }
     // MARK: - Temperature Groups
 
     /// Collapsible accordion of temperature sensor groups (P-Core, E-Core,

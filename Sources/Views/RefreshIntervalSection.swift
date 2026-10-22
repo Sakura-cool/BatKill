@@ -6,8 +6,13 @@
 //  Rendered directly below the temperature threshold section of the hardware
 //  monitor window. The user picks how many seconds ONE full sweep of all
 //  temperature sensors should take (integer 1-9). The value is committed
-//  immediately on input — no confirm button, no restart — and persisted, so
-//  it takes effect again automatically the next time the window is opened.
+//  immediately on input — no restart — and persisted, so it takes effect again
+//  automatically the next time the window is opened.
+//
+//  CHANGE-049: text scaled to ~2/3 of the previous sizes and the paddings
+//  tightened so this card and the threshold card above it read as one tight
+//  settings pair; an explicit "Apply" button sits flush right of the stepper
+//  (it re-commits the current field content, which is already live-applied).
 //
 //  Scope: the value is only consumed by the temperature window's own refresh
 //  timer, so closing the window restores the program's default cadence.
@@ -28,13 +33,13 @@ struct RefreshIntervalSection: View {
     @State private var intervalInput = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
                 Image(systemName: "clock.arrow.2.circlepath")
                     .foregroundColor(.cyan)
-                    .font(.caption)
+                    .font(.system(size: 10))
                 Text(lm.translate("Temperature Refresh Interval", "温度刷新间隔"))
-                    .font(.subheadline).fontWeight(.medium)
+                    .font(.system(size: 10, weight: .medium))
                 Spacer()
             }
 
@@ -42,12 +47,12 @@ struct RefreshIntervalSection: View {
                 "Seconds for one full sensor sweep. Applies only while this window is open; the default cadence is restored after closing.",
                 "全部传感器刷新一轮所需秒数。仅在本窗口打开期间生效，关闭后恢复程序默认刷新速度。"
             ))
-            .font(.caption2)
+            .font(.system(size: 8))
             .foregroundColor(.secondary)
 
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 Text(lm.translate("Cycle:", "间隔:"))
-                    .font(.caption)
+                    .font(.system(size: 9))
 
                 // Stepper with clamped range 1-9 seconds, same control pattern
                 // as the threshold stepper.
@@ -62,18 +67,27 @@ struct RefreshIntervalSection: View {
                     HStack(spacing: 2) {
                         TextField("1-9", text: $intervalInput)
                             .textFieldStyle(.roundedBorder)
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(width: 36)
+                            .font(.system(size: 8, design: .monospaced))
+                            .frame(width: 30)
                             .multilineTextAlignment(.center)
                             .onChange(of: intervalInput) { _, newValue in
                                 commit(newValue)
                             }
                             .onSubmit { submit() }
                         Text(lm.translate("sec", "秒"))
-                            .font(.caption)
+                            .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }
                 }
+
+                // Explicit commit button flush right of the stepper (CHANGE-049)
+                Button(action: { commit(intervalInput) }, label: {
+                    Text(lm.translate("Apply", "应用"))
+                        .font(.system(size: 9))
+                })
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .frame(width: 44)
 
                 Spacer()
 
@@ -84,12 +98,12 @@ struct RefreshIntervalSection: View {
                         .fill(Color.green)
                         .frame(width: 6, height: 6)
                     Text(lm.translate("Active", "生效中"))
-                        .font(.caption2)
+                        .font(.system(size: 8))
                         .foregroundColor(.secondary)
                 }
             }
         }
-        .padding(12)
+        .padding(8)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
         .onAppear { intervalInput = "\(store.seconds)" }
