@@ -281,9 +281,9 @@ struct TemperatureView: View {
             HStack(spacing: 4) {
                 Image(systemName: "thermometer")
                     .foregroundColor(.orange)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: 11.5))
                 Text(lm.translate("Fan Temperature Threshold", "风扇温度阈值"))
-                    .font(.system(size: 12.5, weight: .medium))
+                    .font(.system(size: 11.5, weight: .medium))
                 Spacer()
             }
 
@@ -291,12 +291,12 @@ struct TemperatureView: View {
                 "When CPU exceeds this temperature, fan control is released to the system.",
                 "当 CPU 超过此温度时，风扇控制将交还系统。"
             ))
-            .font(.system(size: 10))
+            .font(.system(size: 9))
             .foregroundColor(.secondary)
 
             HStack(spacing: 4) {
                 Text(lm.translate("Threshold:", "阈值:"))
-                    .font(.system(size: 11))
+                    .font(.system(size: 10))
 
                 // Field and unit sit OUTSIDE the stepper: with an empty title the
                 // stepper renders only its arrows, so they can be scaled down
@@ -304,12 +304,12 @@ struct TemperatureView: View {
                 HStack(spacing: 3) {
                     TextField("60-120", text: $thresholdInput)
                         .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 9, design: .monospaced))
                         .frame(width: 30)
                         .multilineTextAlignment(.center)
                         .onSubmit { applyThreshold() }
                     Text("°C")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(.secondary)
                     Stepper("", value: Binding(
                         get: { thresholdStore.threshold },
@@ -326,7 +326,7 @@ struct TemperatureView: View {
                 // Explicit commit button flush right of the stepper (CHANGE-049)
                 Button(action: { applyThreshold() }, label: {
                     Text(lm.translate("Apply", "应用"))
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                 })
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
@@ -337,7 +337,7 @@ struct TemperatureView: View {
                 // Overheat danger warning
                 if hardwareMonitor.thermalThrottled {
                     Text(lm.translate("Overheat Danger!", "过温危险!"))
-                        .font(.system(size: 11)).fontWeight(.bold)
+                        .font(.system(size: 10)).fontWeight(.bold)
                         .foregroundColor(.red)
                 }
 
@@ -345,10 +345,10 @@ struct TemperatureView: View {
                 let cpuTemp = hardwareMonitor.smoothedCPUTemp
                 HStack(spacing: 4) {
                     Text(lm.translate("CPU Avg:", "CPU 均温:"))
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                         .foregroundColor(.secondary)
                     Text(String(format: "%.1f°C", cpuTemp))
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(cpuTemp >= thresholdStore.threshold ? .red : .primary)
                     Circle()
                         .fill(cpuTemp >= thresholdStore.threshold ? Color.red : Color.green)
