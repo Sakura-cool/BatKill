@@ -10,18 +10,22 @@
 //  automatically the next time the window is opened.
 //
 //  CHANGE-049: text scaled to ~2/3 of the previous sizes and the paddings
-//  tightened so this card and the threshold card above it read as one tight
-//  settings pair; an explicit "Apply" button sits flush right of the stepper
-//  (it re-commits the current field content, which is already live-applied).
+//  tightened; an explicit "Apply" button sits flush right of the stepper (it
+//  re-commits the current field content, which is already live-applied).
+//
+//  CHANGE-051: `carded == false` drops the card chrome so this section can be
+//  composed inside the shared threshold+refresh card; the stepper uses
+//  `.controlSize(.mini)`; and the field is re-synced from the store so the
+//  stepper arrows visibly move the number.
 //
 //  Scope: the value is only consumed by the temperature window's own refresh
 //  timer, so closing the window restores the program's default cadence.
 
 import SwiftUI
 
-/// Refresh interval section card, visually mirroring the temperature threshold
-/// card (same padding, background, corner radius and icon-title-description-row
-/// structure).
+/// Refresh interval section, visually mirroring the temperature threshold
+/// section (same padding, background, corner radius and icon-title-description
+/// row structure).
 struct RefreshIntervalSection: View {
     /// Persisted refresh interval store (1-9 seconds per full sweep).
     @ObservedObject var store: TemperatureRefreshIntervalStore
@@ -29,10 +33,26 @@ struct RefreshIntervalSection: View {
     /// Localization manager.
     @ObservedObject var lm: LocalizationManager
 
+    /// Draws the card chrome (padding/background/corner radius). False when the
+    /// section is embedded in the shared threshold+refresh card (CHANGE-051).
+    var carded = true
+
     /// Text field content while the user is typing.
     @State private var intervalInput = ""
 
     var body: some View {
+        if carded {
+            cardContent
+                .padding(8)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
+        } else {
+            cardContent
+        }
+    }
+
+    /// Card inner content, shared by the carded and embedded variants.
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 4) {
                 Image(systemName: "clock.arrow.2.circlepath")
@@ -79,6 +99,7 @@ struct RefreshIntervalSection: View {
                             .foregroundColor(.secondary)
                     }
                 }
+                .controlSize(.mini)
 
                 // Explicit commit button flush right of the stepper (CHANGE-049)
                 Button(action: { commit(intervalInput) }, label: {
@@ -103,10 +124,13 @@ struct RefreshIntervalSection: View {
                 }
             }
         }
-        .padding(8)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
         .onAppear { intervalInput = "\(store.seconds)" }
+        // The stepper mutates the store without touching the field, so push the
+        // new value back here — otherwise the arrows look inert (CHANGE-051).
+        // Idempotent for the typing path, which already writes the same string.
+        .onChange(of: store.seconds) { _, seconds in
+            resync(seconds: seconds)
+        }
     }
 
     /// Commits typed input immediately: keeps digits only, clamps into 1-9,
@@ -117,7 +141,12 @@ struct RefreshIntervalSection: View {
         guard !digits.isEmpty else { return }
         let value = TemperatureRefreshIntervalStore.clamp(Int(digits) ?? store.seconds)
         store.set(seconds: value)
-        let display = "\(value)"
+        resync(seconds: value)
+    }
+
+    /// Re-syncs the field with a value already committed to the store.
+    private func resync(seconds: Int) {
+        let display = "\(seconds)"
         if intervalInput != display { intervalInput = display }
     }
 

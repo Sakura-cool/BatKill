@@ -106,15 +106,18 @@ struct TemperatureView: View {
                         if hardwareMonitor.thermalThrottled {
                             thermalWarningBanner
                         }
-                        // Threshold + refresh interval are one tight settings group:
-                        // 4pt (the app's standard spacing unit) instead of the 8pt
-                        // card gap, so the two numeric rows read as a single block.
-                        VStack(spacing: 4) {
+                        // Threshold + refresh interval share ONE card so the gap
+                        // between them is the normal intra-card text spacing.
+                        VStack(alignment: .leading, spacing: 5) {
                             if !hardwareMonitor.fans.isEmpty {
                                 thresholdSection
+                                Divider()
                             }
-                            RefreshIntervalSection(store: refreshIntervalStore, lm: lm)
+                            RefreshIntervalSection(store: refreshIntervalStore, lm: lm, carded: false)
                         }
+                        .padding(8)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .cornerRadius(8)
                         temperatureGroups
                         if !hardwareMonitor.fans.isEmpty {
                             ZStack {
@@ -272,6 +275,7 @@ struct TemperatureView: View {
 
     /// Configurable temperature threshold with a stepper and direct input.
     /// Exceeding it releases fan control to the system for safety.
+    /// Inner content only — the shared settings card supplies the chrome.
     private var thresholdSection: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 4) {
@@ -318,6 +322,7 @@ struct TemperatureView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+                .controlSize(.mini)
 
                 // Explicit commit button flush right of the stepper (CHANGE-049)
                 Button(action: { applyThreshold() }, label: {
@@ -352,9 +357,6 @@ struct TemperatureView: View {
                 }
             }
         }
-        .padding(8)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
     }
 
     /// Commits the threshold field: keeps digits only, clamps into 60-120,
