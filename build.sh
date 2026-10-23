@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Options:"
       echo "  --arch ARCH   Build for specific architecture (arm64|x86_64)"
-      echo "  --dmg         Build and package as .dmg + .zip"
+      echo "  --dmg         Build and package as .dmg (zip no longer produced since 2026-10-23)"
       echo "  --all         Build for both architectures (default)"
       echo "  --help, -h    Show this help message"
       exit 0 ;;
@@ -199,13 +199,6 @@ package_dmg() {
 
   rm -rf "$stage_dir"
   echo "  ✅ ${dmg_path}"
-
-  # ── Also create .app.zip from the same build ──
-  local zip_path="${package_dir}/${APP_NAME}-${arch}.app.zip"
-  echo "  📦 Creating ${APP_NAME}-${arch}.app.zip …"
-  rm -f "$zip_path"
-  ditto -c -k --keepParent "$app_bundle" "$zip_path"
-  echo "  ✅ ${zip_path}"
 }
 
 # ── Package DMG (only in --dmg mode) ──
@@ -225,7 +218,6 @@ for arch in "${ARCHES[@]}"; do
   echo "  .build/${arch}/${APP_NAME}-${arch}.app"
   if [ "$BUILD_DMG" = true ]; then
     echo "  💿 .package/${arch}/${APP_NAME}-${arch}.dmg"
-    echo "  📦 .package/${arch}/${APP_NAME}-${arch}.app.zip"
   fi
 done
 echo "═══════════════════════════════════════════"

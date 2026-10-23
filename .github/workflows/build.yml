@@ -47,10 +47,9 @@ jobs:
             - macOS arm64（Apple Silicon）
             - macOS x86_64（Intel）
 
-            资产：`.dmg` 安装包 + `.app.zip` 免安装版
+            资产：`.dmg` 安装包（arm64 + x86_64）
+            注：自 2026-10-23 起不再产出 `.app.zip`，仅发布 dmg
           draft: true
           files: |
             .package/arm64/BatKill-arm64.dmg
-            .package/arm64/BatKill-arm64.app.zip
             .package/x86_64/BatKill-x86_64.dmg
-            .package/x86_64/BatKill-x86_64.app.zip
