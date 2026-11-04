@@ -39,6 +39,53 @@ final class AppLister: ObservableObject {
     /// UserDefaults key for tracking known system paths (informational).
     private let isSystemPathsKey = "knownSystemPaths"
 
+    /// UserDefaults key for per-app suspend strategy (path -> rawValue).
+    private let suspendStrategyKey = "appSuspendStrategies"
+
+    /// UserDefaults key for the last manual suspend-strategy update timestamp.
+    /// Used to expire the temporary override (~30 days) so auto defaults are
+    /// re-evaluated after a software update (CHANGE-061).
+    private let suspendStrategySetAtKey = "appSuspendStrategiesSetAt"
+
+    /// How long a temporary manual override stays valid before BatKill resets
+    /// to auto defaults (30 days).
+    private let suspendStrategyResetInterval: TimeInterval = 30 * 24 * 3600
+
+    /// UserDefaults key for the set of currently `SIGSTOP`-frozen app paths.
+    /// Shared with ProcessKiller (writer) -- AppLister reads it to hydrate
+    /// `AppItem.isSuspended` for UI display.
+    private let suspendedPathsKey = "suspendedPaths"
+
+    // MARK: - Persisted Suspend Strategy
+
+    /// Per-app suspend strategy map (path -> SuspendStrategy rawValue).
+    /// Persisted to UserDefaults so each app's mode survives restarts.
+    /// Missing entries fall back to the per-app auto default (`autoSuspendStrategy`).
+    private var appSuspendStrategies: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: suspendStrategyKey) as? [String: String] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: suspendStrategyKey) }
+    }
+
+    /// Timestamp of the last manual suspend-strategy update (or reset).
+    /// Persisted so the temporary override expires across restarts.
+    private var suspendStrategySetAt: Date {
+        get { UserDefaults.standard.object(forKey: suspendStrategySetAtKey) as? Date ?? .distantPast }
+        set { UserDefaults.standard.set(newValue, forKey: suspendStrategySetAtKey) }
+    }
+
+    /// Set of app paths currently frozen via `SIGSTOP` (suspend mode).
+    /// Read-only here; ProcessKiller owns writes.
+    private var suspendedPathsSet: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: suspendedPathsKey) ?? [])
+    }
+
+    /// Resolves the suspend strategy for an app: the user's temporary override
+    /// if present, else the per-app auto default (sequence: suspend -> graceful
+    /// -> force, first supported).
+    private func suspendStrategy(for app: AppItem) -> SuspendStrategy {
+        appSuspendStrategies[app.path].flatMap(SuspendStrategy.init(rawValue:)) ?? app.autoSuspendStrategy
+    }
+
     // MARK: - Persisted Selection
 
     /// Set of app paths that the user has checked in the settings UI.
@@ -96,6 +143,22 @@ final class AppLister: ObservableObject {
         var paths = selectedPaths
         if apps[idx].isSelected { paths.insert(path) } else { paths.remove(path) }
         selectedPaths = paths
+    }
+
+    /// Sets the suspend strategy for an app and persists it as a temporary
+    /// user override. Mutates the array element to trigger `@Published`.
+    /// The override is stored regardless of mode (no removal) and refreshes
+    /// the expiry timestamp so the user's choice is respected for ~30 days.
+    func setSuspendStrategy(_ mode: SuspendStrategy, for app: AppItem) {
+        guard let idx = apps.firstIndex(where: { $0.id == app.id }) else { return }
+        var mutable = apps[idx]
+        mutable.suspendStrategy = mode
+        apps[idx] = mutable // replaces element -> triggers @Published
+
+        var strategies = appSuspendStrategies
+        strategies[app.id] = mode.rawValue
+        appSuspendStrategies = strategies
+        suspendStrategySetAt = Date()
     }
 
     // MARK: - App Discovery (5-Phase Process)
@@ -235,6 +298,24 @@ final class AppLister: ObservableObject {
             ))
         }
 
+        // ── Exclude core macOS system components (v0.2.4 CHANGE-060) ──
+        // Core components (Dock, Finder, XPC helpers, ...) break core computer
+        // function if managed, so they are filtered out of the discoverable /
+        // killable list and never shown to the user.
+        result = result.compactMap { app in
+            if SystemCoreProtection.isCoreSystemComponent(
+                path: app.path,
+                bundleIdentifier: app.bundleIdentifier,
+                processName: app.processName
+            ) {
+                return nil
+            }
+            return app
+        }
+
+        // ── Suspend strategy: expire + repair temporary overrides, then hydrate ──
+        result = hydrateSuspendStrategies(result)
+
         // ── Sort: running apps first, then alphabetically ──
         result.sort { a, b in
             if a.isRunning != b.isRunning { return a.isRunning && !b.isRunning }
@@ -242,6 +323,40 @@ final class AppLister: ObservableObject {
         }
 
         return result
+    }
+
+    /// Expires + repairs temporary per-app suspend-strategy overrides, then
+    /// hydrates each app's strategy and suspended state (CHANGE-061).
+    ///
+    /// 1. A ~30-day-old manual override is reset so auto defaults re-evaluate
+    ///    (following an app's capabilities after a software update).
+    /// 2. Any stored mode the app no longer supports is downgraded per sequence.
+    /// 3. Missing entries fall back to the per-app auto default (prefer suspend).
+    private func hydrateSuspendStrategies(_ apps: [AppItem]) -> [AppItem] {
+        if AppItem.isSuspendStrategyConfigExpired(lastSetAt: suspendStrategySetAt, now: Date(), interval: suspendStrategyResetInterval) {
+            // First run after upgrading from a build without the timestamp key:
+            // keep existing overrides but start the ~30-day countdown, instead of
+            // wiping the user's manual choices on upgrade.
+            if suspendStrategySetAt == .distantPast && !appSuspendStrategies.isEmpty {
+                suspendStrategySetAt = Date()
+            } else {
+                if !appSuspendStrategies.isEmpty {
+                    appSuspendStrategies = [:]
+                }
+                suspendStrategySetAt = Date()
+            }
+        }
+        let repaired = AppItem.repairedStrategies(appSuspendStrategies, for: apps)
+        if repaired != appSuspendStrategies {
+            appSuspendStrategies = repaired
+        }
+
+        return apps.map { app in
+            var hydrated = app
+            hydrated.suspendStrategy = self.suspendStrategy(for: app)
+            hydrated.isSuspended = self.suspendedPathsSet.contains(app.path)
+            return hydrated
+        }
     }
 
     // MARK: - Runtime Info Helpers

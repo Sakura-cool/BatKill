@@ -69,6 +69,20 @@ struct AppRowView: View {
                     .foregroundColor(app.isRunning ? .green : .secondary)
             }
 
+            // -- Suspended Badge --
+            // Shown when the app is SIGSTOP-frozen (suspend mode) and awaiting
+            // an AC-time resume. Distinct from the green Running / gray Stopped.
+            if app.isSuspended {
+                Text(lm.translate("Suspended", "已挂起"))
+                    .font(.caption2)
+                    .foregroundColor(.yellow)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.yellow.opacity(0.12))
+                    .cornerRadius(4)
+                    .help(lm.translate("Frozen; resumes on AC", "已冻结，接电后恢复"))
+            }
+
             // -- System Badge --
             // Shown only for system-level apps to warn the user.
             if app.isSystemApp {

@@ -21,6 +21,14 @@ final class AppItemTests: TestCase {
         testAppItemID()
         testAppCategoryRawValues()
         testAppCategoryCaseIterable()
+        testSuspendStrategyRawValues()
+        testSuspendStrategyCaseIterable()
+        testSuspendStrategyDefault()
+        testSuspendStrategyCodingKeys()
+        testSuspendStrategySupports()
+        testSuspendStrategyAutoDefault()
+        testSuspendStrategyRepaired()
+        testSuspendStrategyExpired()
     }
 
     // MARK: - AppItem Codable Tests
@@ -207,6 +215,177 @@ final class AppItemTests: TestCase {
             XCTAssertTrue(allCases.contains(.service))
             XCTAssertTrue(allCases.contains(.launchAgent))
             XCTAssertTrue(allCases.contains(.custom))
+        }
+    }
+
+    // MARK: - SuspendStrategy Tests (REQ-017 / v0.2.4)
+
+    func testSuspendStrategyRawValues() {
+        runTest("SuspendStrategy raw values") {
+            XCTAssertEqual(SuspendStrategy.suspend.rawValue, "suspend")
+            XCTAssertEqual(SuspendStrategy.graceful.rawValue, "graceful")
+            XCTAssertEqual(SuspendStrategy.force.rawValue, "force")
+        }
+    }
+
+    func testSuspendStrategyCaseIterable() {
+        runTest("SuspendStrategy case iterable") {
+            let allCases = SuspendStrategy.allCases
+            XCTAssertEqual(allCases.count, 3, "Should have 3 strategies")
+            XCTAssertTrue(allCases.contains(.suspend))
+            XCTAssertTrue(allCases.contains(.graceful))
+            XCTAssertTrue(allCases.contains(.force))
+        }
+    }
+
+    func testSuspendStrategyDefault() {
+        runTest("AppItem default suspendStrategy is graceful") {
+            let app = AppItem(
+                name: "DefaultStrategy",
+                bundleIdentifier: "com.default.strategy",
+                path: "/Applications/DefaultStrategy.app",
+                processName: "DefaultStrategy",
+                isSelected: false,
+                isSystemApp: false,
+                category: .application,
+                serviceLabel: nil
+            )
+            XCTAssertEqual(app.suspendStrategy, .graceful, "默认应为优雅退出")
+            XCTAssertEqual(app.isSuspended, false, "默认未挂起")
+        }
+    }
+
+    func testSuspendStrategyCodingKeys() {
+        runTest("SuspendStrategy coded, isSuspended transient") {
+            var app = AppItem(
+                name: "StrategyCoding",
+                bundleIdentifier: "com.strategy.coding",
+                path: "/Applications/StrategyCoding.app",
+                processName: "StrategyCoding",
+                isSelected: false,
+                isSystemApp: false,
+                category: .application,
+                serviceLabel: nil
+            )
+            app.suspendStrategy = .suspend
+            app.isSuspended = true
+
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(app)
+            let json = String(bytes: data, encoding: .utf8) ?? ""
+
+            // suspendStrategy IS persisted; isSuspended is transient
+            XCTAssertTrue(json.contains("suspendStrategy"), "suspendStrategy 应被编码")
+            XCTAssertTrue(json.contains("\"suspendStrategy\":\"suspend\""), "值应为 suspend")
+            XCTAssertFalse(json.contains("isSuspended"), "isSuspended 不应被编码")
+        }
+    }
+
+    // MARK: - Suspend Strategy Capability (CHANGE-061)
+
+    func testSuspendStrategySupports() {
+        runTest("supports: application supports all three") {
+            let app = AppItem(
+                name: "App", bundleIdentifier: "com.app", path: "/Applications/App.app",
+                processName: "App", isSelected: false, isSystemApp: false,
+                category: .application, serviceLabel: nil)
+            XCTAssertTrue(app.supports(.suspend), ".application 支持挂起")
+            XCTAssertTrue(app.supports(.graceful), ".application 支持优雅退出")
+            XCTAssertTrue(app.supports(.force), ".application 支持强制退出")
+            XCTAssertTrue(app.participatesInSuspendSequence)
+        }
+
+        runTest("supports: custom supports suspend only") {
+            let app = AppItem(
+                name: "Helper", bundleIdentifier: nil, path: "/System/Library/CoreServices/Dock.app/Contents/XPCServices/DockHelper.xpc",
+                processName: "DockHelper", isSelected: false, isSystemApp: false,
+                category: .custom, serviceLabel: nil)
+            XCTAssertTrue(app.supports(.suspend), ".custom 支持挂起（唯一可恢复方式）")
+            XCTAssertFalse(app.supports(.graceful), ".custom 不支持优雅退出（无启动机制）")
+            XCTAssertFalse(app.supports(.force), ".custom 不支持强制退出（无启动机制）")
+        }
+
+        runTest("supports: launch agent / service not in sequence") {
+            let agent = AppItem(
+                name: "Agent", bundleIdentifier: nil, path: "/Library/LaunchAgents/a.plist",
+                processName: "a", isSelected: false, isSystemApp: false,
+                category: .launchAgent, serviceLabel: "a")
+            XCTAssertFalse(agent.participatesInSuspendSequence, "launchAgent 不参与序列")
+            XCTAssertFalse(agent.supports(.suspend))
+            let service = AppItem(
+                name: "Svc", bundleIdentifier: nil, path: "/opt/homebrew/opt/x",
+                processName: "x", isSelected: false, isSystemApp: false,
+                category: .service, serviceLabel: "x")
+            XCTAssertFalse(service.participatesInSuspendSequence, "service 不参与序列")
+            XCTAssertFalse(service.supports(.graceful))
+        }
+    }
+
+    func testSuspendStrategyAutoDefault() {
+        runTest("autoSuspendStrategy: application defaults to suspend") {
+            let app = AppItem(
+                name: "App", bundleIdentifier: "com.app", path: "/Applications/App.app",
+                processName: "App", isSelected: false, isSystemApp: false,
+                category: .application, serviceLabel: nil)
+            XCTAssertEqual(app.autoSuspendStrategy, .suspend, "序列首选挂起")
+        }
+
+        runTest("autoSuspendStrategy: custom defaults to suspend") {
+            let app = AppItem(
+                name: "Helper", bundleIdentifier: nil, path: "/tmp/h.xpc",
+                processName: "h", isSelected: false, isSystemApp: false,
+                category: .custom, serviceLabel: nil)
+            XCTAssertEqual(app.autoSuspendStrategy, .suspend, "custom 仅挂起可恢复 → 默认挂起")
+        }
+    }
+
+    func testSuspendStrategyRepaired() {
+        runTest("repairedStrategies: downgrades unsupported modes per sequence") {
+            let custom = AppItem(
+                name: "Helper", bundleIdentifier: nil, path: "/tmp/h.xpc",
+                processName: "h", isSelected: false, isSystemApp: false,
+                category: .custom, serviceLabel: nil)
+            let app = AppItem(
+                name: "App", bundleIdentifier: "com.app", path: "/Applications/App.app",
+                processName: "App", isSelected: false, isSystemApp: false,
+                category: .application, serviceLabel: nil)
+
+            // custom stored as graceful/force (unsupported) -> repaired to suspend
+            let repaired = AppItem.repairedStrategies(
+                [custom.path: "graceful", app.path: "force"],
+                for: [custom, app])
+            XCTAssertEqual(repaired[custom.path], "suspend", "custom 不支持优雅 → 降级挂起")
+            XCTAssertEqual(repaired[app.path], "force", ".app 支持强制 → 保留用户选择")
+        }
+
+        runTest("repairedStrategies: leaves supported & out-of-sequence entries") {
+            let custom = AppItem(
+                name: "Helper", bundleIdentifier: nil, path: "/tmp/h.xpc",
+                processName: "h", isSelected: false, isSystemApp: false,
+                category: .custom, serviceLabel: nil)
+            let agent = AppItem(
+                name: "Agent", bundleIdentifier: nil, path: "/Library/LaunchAgents/a.plist",
+                processName: "a", isSelected: false, isSystemApp: false,
+                category: .launchAgent, serviceLabel: "a")
+            // custom=suspend (supported) stays; agent entry (out of sequence) untouched
+            let repaired = AppItem.repairedStrategies(
+                [custom.path: "suspend", agent.path: "force"],
+                for: [custom, agent])
+            XCTAssertEqual(repaired[custom.path], "suspend", "custom 挂起受支持 → 保留")
+            XCTAssertEqual(repaired[agent.path], "force", "launchAgent 不参与序列 → 不动")
+        }
+    }
+
+    func testSuspendStrategyExpired() {
+        runTest("config expiry: 30+ days old is expired") {
+            let now = Date()
+            let old = now.addingTimeInterval(-31 * 24 * 3600)
+            XCTAssertTrue(AppItem.isSuspendStrategyConfigExpired(lastSetAt: old, now: now, interval: 30 * 24 * 3600), "31 天前应过期")
+        }
+        runTest("config expiry: recent manual update not expired") {
+            let now = Date()
+            let recent = now.addingTimeInterval(-1 * 24 * 3600)
+            XCTAssertFalse(AppItem.isSuspendStrategyConfigExpired(lastSetAt: recent, now: now, interval: 30 * 24 * 3600), "1 天前未过期")
         }
     }
 }

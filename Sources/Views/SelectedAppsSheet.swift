@@ -91,6 +91,29 @@ struct SelectedAppsSheet: View {
                                         .frame(width: 6, height: 6)
                                 }
 
+                                // Suspend strategy picker (per-app)
+                                // Lets the user choose how BatKill preserves this
+                                // app's state on battery and restores it on AC.
+                                Menu {
+                                    ForEach(SuspendStrategy.allCases, id: \.self) { mode in
+                                        Button {
+                                            appLister.setSuspendStrategy(mode, for: app)
+                                        } label: {
+                                            if mode == app.suspendStrategy {
+                                                Label(strategyLabel(mode), systemImage: "checkmark")
+                                            } else {
+                                                Text(strategyLabel(mode))
+                                            }
+                                        }
+                                    }
+                                } label: {
+                                    Image(systemName: strategyIcon(app.suspendStrategy))
+                                        .foregroundColor(.secondary)
+                                }
+                                .menuStyle(.borderlessButton)
+                                .controlSize(.small)
+                                .help(strategyHelp(app.suspendStrategy))
+
                                 // Remove (deselect) button
                                 Button {
                                     appLister.toggleApp(app)
@@ -160,6 +183,33 @@ struct SelectedAppsSheet: View {
         case .service:      return lm.translate("Background Service", "后台服务")
         case .launchAgent:  return lm.translate("Launch Agent", "启动代理")
         case .custom:       return lm.translate("Custom", "自定义")
+        }
+    }
+
+    /// Localized suspend-strategy option label.
+    private func strategyLabel(_ mode: SuspendStrategy) -> String {
+        switch mode {
+        case .suspend:  return lm.translate("Suspend", "挂起")
+        case .graceful: return lm.translate("Graceful Quit", "优雅退出")
+        case .force:    return lm.translate("Force Quit", "强制退出")
+        }
+    }
+
+    /// SF Symbol representing the given suspend strategy.
+    private func strategyIcon(_ mode: SuspendStrategy) -> String {
+        switch mode {
+        case .suspend:  return "pause.circle"
+        case .graceful: return "arrow.down.circle"
+        case .force:    return "bolt.circle"
+        }
+    }
+
+    /// Tooltip explaining the trade-off of the given suspend strategy.
+    private func strategyHelp(_ mode: SuspendStrategy) -> String {
+        switch mode {
+        case .suspend:  return lm.translate("Suspend: keeps state, uses memory", "挂起：保留状态，占用内存")
+        case .graceful: return lm.translate("Graceful quit: app saves its own state", "优雅退出：软件自行保存状态")
+        case .force:    return lm.translate("Force quit: most battery-efficient", "强制退出：最省电")
         }
     }
 }

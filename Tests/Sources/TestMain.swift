@@ -31,6 +31,7 @@ struct TestMain {
         TestRunner.register("UpdaterTests") { UpdaterTests() }
         TestRunner.register("TemperatureReadingTests") { TemperatureReadingTests() }
         TestRunner.register("ProcessKillerTests") { ProcessKillerTests() }
+        TestRunner.register("SystemCoreProtectionTests") { SystemCoreProtectionTests() }
 
         // Run all tests
         TestRunner.runAll()

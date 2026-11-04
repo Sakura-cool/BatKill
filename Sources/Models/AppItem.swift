@@ -29,6 +29,25 @@ enum AppCategory: String, Codable, CaseIterable {
     case custom = "Custom"
 }
 
+// MARK: - Suspend Strategy
+
+/// How BatKill preserves a running app's state when switching to battery,
+/// and how it restores it when AC power returns.
+///
+/// - `suspend`: Send `SIGSTOP` to freeze the app in place; on AC, `SIGCONT`
+///   resumes it exactly where it paused. Preserves all internal state
+///   (unsaved edits, playback position) but keeps the process in memory.
+/// - `graceful`: Gracefully quit (`terminate()`) with an extended wait so the
+///   app can persist its own state (autosave / resume); on AC, relaunch and
+///   let the app restore what it saved. Frees all memory. Default.
+/// - `force`: Existing escalation chain (`terminate` -> `forceTerminate` ->
+///   SIGTERM -> SIGKILL -> killall). Most battery-efficient, loses state. Fallback.
+enum SuspendStrategy: String, Codable, CaseIterable {
+    case suspend
+    case graceful
+    case force
+}
+
 // MARK: - App Item
 
 /// Represents a single application that BatKill can track, kill, and restore.
@@ -82,10 +101,106 @@ struct AppItem: Identifiable, Codable, Equatable {
     /// Used to start/stop services via `launchctl`.
     var serviceLabel: String?
 
+    /// How BatKill preserves/restores this app's state on battery/AC transitions.
+    /// Persisted per-app via `appSuspendStrategies` in UserDefaults (hydrated by AppLister).
+    /// Defaults to `.graceful` (graceful quit + app-driven state save).
+    var suspendStrategy: SuspendStrategy = .graceful
+
+    /// Whether this app is currently frozen by a `SIGSTOP` (suspend mode) and
+    /// awaits a `SIGCONT` resume on AC. Transient -- hydrated from `suspendedPaths`.
+    /// NOT persisted to UserDefaults (excluded from CodingKeys).
+    var isSuspended: Bool = false
+
     // MARK: CodingKeys
 
     enum CodingKeys: String, CodingKey {
-        case name, bundleIdentifier, path, processName, isSelected, isSystemApp, category, serviceLabel
-        // isRunning and pid are transient -- re-evaluated on each refresh, not persisted
+        case name, bundleIdentifier, path, processName, isSelected, isSystemApp, category, serviceLabel, suspendStrategy
+        // isRunning, pid and isSuspended are transient -- re-evaluated on each refresh, not persisted
+    }
+}
+
+// MARK: - AppItem Decodable (Backward Compatible)
+
+/// Custom decoding so `suspendStrategy` (added in v0.2.4) tolerates older
+/// persisted data that predates the key, falling back to `.graceful` (default).
+/// Defined in an extension to preserve the memberwise initializer.
+extension AppItem {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        bundleIdentifier = try container.decodeIfPresent(String.self, forKey: .bundleIdentifier)
+        path = try container.decode(String.self, forKey: .path)
+        processName = try container.decode(String.self, forKey: .processName)
+        isSelected = try container.decodeIfPresent(Bool.self, forKey: .isSelected) ?? false
+        isSystemApp = try container.decodeIfPresent(Bool.self, forKey: .isSystemApp) ?? false
+        category = try container.decodeIfPresent(AppCategory.self, forKey: .category) ?? .application
+        serviceLabel = try container.decodeIfPresent(String.self, forKey: .serviceLabel)
+        suspendStrategy = try container.decodeIfPresent(SuspendStrategy.self, forKey: .suspendStrategy) ?? .graceful
+        // isRunning, pid, isSuspended are transient -- left at their defaults
+    }
+}
+
+// MARK: - Suspend Strategy Capability (v0.2.4 CHANGE-061)
+
+/// Capability-aware suspend-strategy selection. BatKill picks a per-app default
+/// from an ordered preference sequence (`suspend` -> `graceful` -> `force`),
+/// taking the first mode the app actually supports. The user's manual choice is
+/// stored as a temporary override (see `AppLister`); these helpers decide the
+/// auto default and repair any stored mode the app no longer supports.
+extension AppItem {
+    /// Whether this app participates in the suspend-strategy sequence.
+    /// `.application` and `.custom` can be configured; `.launchAgent`/`.service`
+    /// keep their existing kill/restore strategy (not strategy-based).
+    var participatesInSuspendSequence: Bool {
+        category == .application || category == .custom
+    }
+
+    /// Whether this app technically supports the given suspend strategy.
+    ///
+    /// - `suspend` needs a signalable process (`SIGSTOP`/`SIGCONT`) -- any
+    ///   process works, no launch mechanism required.
+    /// - `graceful`/`force` exit the process and must relaunch it on AC, which
+    ///   requires an independent launch mechanism (`.app` bundles). `.custom`
+    ///   (e.g. XPC helpers) has none, so only `suspend` can restore it.
+    func supports(_ strategy: SuspendStrategy) -> Bool {
+        guard participatesInSuspendSequence else { return false }
+        switch category {
+        case .application:
+            return true // .app has a launch mechanism + a signalable PID
+        case .custom:
+            return strategy == .suspend // no launch mechanism; suspend-only
+        default:
+            return false
+        }
+    }
+
+    /// The auto-default strategy: first supported mode in the sequence
+    /// `suspend` -> `graceful` -> `force` (prefer resumable suspend).
+    var autoSuspendStrategy: SuspendStrategy {
+        if supports(.suspend) { return .suspend }
+        if supports(.graceful) { return .graceful }
+        return .force
+    }
+
+    /// Whether the temporary per-app strategy config has expired (default ~30
+    /// days since last manual update), so BatKill re-evaluates auto defaults to
+    /// follow an app's changed capabilities after a software update.
+    static func isSuspendStrategyConfigExpired(lastSetAt: Date, now: Date, interval: TimeInterval) -> Bool {
+        now.timeIntervalSince(lastSetAt) > interval
+    }
+
+    /// Repairs a stored strategy map: any entry whose mode is no longer
+    /// supported by its app is downgraded (per sequence) to the first supported
+    /// mode, so erroneous config stops taking effect. Only apps participating
+    /// in the sequence are touched.
+    static func repairedStrategies(_ strategies: [String: String], for apps: [AppItem]) -> [String: String] {
+        var result = strategies
+        for app in apps where app.participatesInSuspendSequence {
+            guard let raw = strategies[app.path],
+                  let stored = SuspendStrategy(rawValue: raw),
+                  !app.supports(stored) else { continue }
+            result[app.path] = app.autoSuspendStrategy.rawValue
+        }
+        return result
     }
 }

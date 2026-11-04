@@ -46,13 +46,19 @@ final class ProcessKiller: ObservableObject {
     @Published var restoreCount: Int = 0
 
     /// Number of apps in the persisted restore list (pending AC return).
+    /// Includes both killed apps (to relaunch) and suspended apps (to resume).
     @Published var pendingRestoreCount: Int = 0
+
+    /// Seconds to wait for a graceful `terminate()` before escalating to force
+    /// in `.graceful` mode. Longer than the 0.3s used by `killApplication`
+    /// (the force-chain fallback) so state-saving apps can persist their work.
+    private let gracefulWaitSeconds: TimeInterval = 2.0
 
     // MARK: - Init
 
-    /// Initializes the kill count from the persisted restore list.
+    /// Initializes the pending count from the persisted restore lists.
     init() {
-        pendingRestoreCount = UserDefaults.standard.stringArray(forKey: "killedRestorePaths")?.count ?? 0
+        pendingRestoreCount = killedRestorePaths.count + suspendedPaths.count
     }
 
     // MARK: - Persisted "Killed on Battery" List
@@ -65,26 +71,99 @@ final class ProcessKiller: ObservableObject {
         set {
             DispatchQueue.main.async {
                 UserDefaults.standard.set(newValue, forKey: "killedRestorePaths")
-                self.pendingRestoreCount = newValue.count
+                self.pendingRestoreCount = newValue.count + self.suspendedPaths.count
             }
         }
     }
 
-    /// Read-only access to the list of app IDs pending restore.
-    var pendingRestoreAppIds: [String] { killedRestorePaths }
+    // MARK: - Persisted "Suspended on Battery" List
 
-    /// Removes a single app from the restore list (e.g., if user manually
-    /// closes it or no longer wants it auto-restored).
-    func removePending(_ appId: String) {
-        var paths = killedRestorePaths
-        paths.removeAll { $0 == appId }
-        killedRestorePaths = paths
+    /// Paths of apps that were `SIGSTOP`-frozen by BatKill (suspend mode) and
+    /// should be `SIGCONT`-resumed when AC power returns. Backed by UserDefaults
+    /// so the frozen set survives a BatKill restart (the processes stay frozen).
+    /// These apps are NOT killed -- they remain running (stopped) and keep state.
+    ///
+    /// The UserDefaults write is synchronous (not main-async) so reads within
+    /// the same background operation (e.g. `killSelected` checking
+    /// `isSuspendedPath`) see the just-suspended path immediately. Only the
+    /// `@Published` count update is dispatched to the main thread.
+    private var suspendedPaths: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "suspendedPaths") ?? [] }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "suspendedPaths")
+            DispatchQueue.main.async {
+                self.pendingRestoreCount = self.killedRestorePaths.count + newValue.count
+            }
+        }
+    }
+
+    /// Convenience: whether an app path is currently in the suspended set.
+    private func isSuspendedPath(_ path: String) -> Bool {
+        suspendedPaths.contains(path)
+    }
+
+    /// Adds an app path to the suspended set (after a successful SIGSTOP).
+    private func addSuspendedPath(_ path: String) {
+        var paths = suspendedPaths
+        if !paths.contains(path) {
+            paths.append(path)
+            suspendedPaths = paths
+        }
+    }
+
+    /// Removes an app path from the suspended set (after SIGCONT resume or
+    /// when the process is no longer resumable).
+    private func removeSuspendedPath(_ path: String) {
+        var paths = suspendedPaths
+        paths.removeAll { $0 == path }
+        suspendedPaths = paths
+    }
+
+    /// Read-only access to the list of app IDs pending restore (relaunch + resume).
+    var pendingRestoreAppIds: [String] { Array(Set(killedRestorePaths + suspendedPaths)) }
+
+    /// Read-only access to the list of app IDs currently suspended (SIGSTOP-frozen).
+    var suspendedAppIds: [String] { suspendedPaths }
+
+    /// Removes a single app from the restore lists. Behavior differs by state:
+    /// - **Suspended** (SIGSTOP-frozen): deleting means the user no longer
+    ///   wants it auto-resumed, so the frozen process is **terminated outright**
+    ///   (`SIGKILL`) to release the stuck state. Leaving it frozen with no
+    ///   restore entry would leak memory and leave a dead window on screen.
+    /// - **Killed** (graceful/force, already exited): only the record is removed
+    ///   (the process is already gone; the app simply won't be relaunched).
+    func removePending(_ appId: String, using apps: [AppItem] = []) {
+        if suspendedPaths.contains(appId) {
+            terminateFrozenApp(appId, using: apps)
+        }
+        var killed = killedRestorePaths
+        killed.removeAll { $0 == appId }
+        killedRestorePaths = killed
+
+        var suspended = suspendedPaths
+        suspended.removeAll { $0 == appId }
+        suspendedPaths = suspended
+    }
+
+    /// Terminates a SIGSTOP-frozen app by its ID. `apps` is used to resolve the
+    /// PID; if the app is no longer in the list, falls back to matching a
+    /// running app by bundle URL path (appId == path).
+    private func terminateFrozenApp(_ appId: String, using apps: [AppItem]) {
+        if let app = apps.first(where: { $0.id == appId }), let pid = pidFor(app) {
+            kill(pid, SIGKILL)
+            logger("removePending: SIGKILL 已冻结应用 \(app.name) (pid \(pid))")
+            return
+        }
+        if let running = NSWorkspace.shared.runningApplications.first(where: { $0.bundleURL?.path == appId }) {
+            running.forceTerminate()
+            logger("removePending: forceTerminate 已冻结应用 (path \(appId))")
+        }
     }
 
     /// Restores a single pending app by its ID and posts a notification.
     func restorePendingSingle(_ appId: String, using apps: [AppItem]) {
         if let name = restoreSingleApp(appId, using: apps) {
-            removePending(appId)
+            removePending(appId, using: apps)
             restoreCount += 1
             postRestoreNotification(names: [name])
         }
@@ -98,7 +177,9 @@ final class ProcessKiller: ObservableObject {
     ///   after they drop out of the live `apps` list. Apps that fail to
     ///   restore are left in the pending list.
     func restoreSelected(_ apps: [AppItem], selectedPaths: Set<String>, completion: (() -> Void)? = nil) {
-        let toRestore = killedRestorePaths.filter { selectedPaths.contains($0) }
+        // Union of killed (relaunch) and suspended (resume) pending apps.
+        let pending = Array(Set(killedRestorePaths + suspendedPaths))
+        let toRestore = pending.filter { selectedPaths.contains($0) }
         guard !toRestore.isEmpty else {
             logger("restoreSelected: no selected apps in pending list")
             DispatchQueue.main.async { completion?() }
@@ -121,9 +202,13 @@ final class ProcessKiller: ObservableObject {
 
             DispatchQueue.main.async {
                 if !restoredIds.isEmpty {
-                    var paths = self.killedRestorePaths
-                    paths.removeAll { restoredIds.contains($0) }
-                    self.killedRestorePaths = paths
+                    // Clear restored ids from both the relaunch and resume sets.
+                    var remainingKilled = self.killedRestorePaths
+                    remainingKilled.removeAll { restoredIds.contains($0) }
+                    self.killedRestorePaths = remainingKilled
+                    var remainingSuspended = self.suspendedPaths
+                    remainingSuspended.removeAll { restoredIds.contains($0) }
+                    self.suspendedPaths = remainingSuspended
                 }
                 self.restoreCount += restoredNames.count
                 self.isRestoring = false
@@ -176,7 +261,9 @@ final class ProcessKiller: ObservableObject {
                 for (name, success) in results where success {
                     guard let app = selected.first(where: { $0.name == name }) else { continue }
                     let appId = app.id
-                    if !restoreList.contains(appId) {
+                    // Suspended apps are tracked in `suspendedPaths` (resumed via
+                    // SIGCONT), not in `killedRestorePaths` (relaunched) -- skip here.
+                    if !restoreList.contains(appId) && !self.isSuspendedPath(appId) {
                         restoreList.append(appId)
                     }
                 }
@@ -205,7 +292,10 @@ final class ProcessKiller: ObservableObject {
     /// and posts a notification with the names of restored apps.
     func restoreKilledApps(using apps: [AppItem], context: LogContext? = nil, completion: (() -> Void)? = nil) {
         let ctx = context ?? LogContext(name: "restoreKilledApps")
-        let paths = killedRestorePaths
+        // Union of killed apps (relaunch) and suspended apps (SIGCONT resume).
+        // A suspended app is never also in `killedRestorePaths`, but the union
+        // keeps the restore path robust against stale entries in either list.
+        let paths = Array(Set(killedRestorePaths + suspendedPaths))
         guard !paths.isEmpty else {
             ctx.log("没有需要恢复的应用")
             DispatchQueue.main.async { completion?() }
@@ -234,9 +324,15 @@ final class ProcessKiller: ObservableObject {
 
             DispatchQueue.main.async {
                 if !restoredIds.isEmpty {
-                    var remaining = self.killedRestorePaths
-                    remaining.removeAll { restoredIds.contains($0) }
-                    self.killedRestorePaths = remaining
+                    // Clear restored ids from both the relaunch and resume sets.
+                    // `restoreSingleApp` already removes suspended entries, so the
+                    // remaining removal here is idempotent for both lists.
+                    var remainingKilled = self.killedRestorePaths
+                    remainingKilled.removeAll { restoredIds.contains($0) }
+                    self.killedRestorePaths = remainingKilled
+                    var remainingSuspended = self.suspendedPaths
+                    remainingSuspended.removeAll { restoredIds.contains($0) }
+                    self.suspendedPaths = remainingSuspended
                 }
                 self.restoreCount += restoredNames.count
                 self.isRestoring = false
@@ -258,6 +354,24 @@ final class ProcessKiller: ObservableObject {
     /// - `.launchAgent`: `launchctl bootstrap gui/<uid>/<path>`
     /// - `.service`: direct start -> brew services start -> launchctl bootstrap
     private func restoreSingleApp(_ appId: String, using apps: [AppItem]) -> String? {
+        // Suspend mode: `SIGCONT` resume the frozen process in place, preserving
+        // its exact state. If the process is gone (rebooted / manually quit),
+        // remove it from the suspended set and fall back to a fresh relaunch.
+        if isSuspendedPath(appId) {
+            if let pid = currentPid(for: appId, using: apps), kill(pid, SIGCONT) == 0 {
+                removeSuspendedPath(appId)
+                logger("restoreSingleApp: SIGCONT resumed \(appId) (pid \(pid))")
+                // Restore the window that was hidden before suspension.
+                if let app = apps.first(where: { $0.id == appId }) {
+                    unhideApp(app)
+                }
+                return displayName(for: appId, using: apps)
+            }
+            logger("restoreSingleApp: suspended \(appId) not resumable, relaunching")
+            removeSuspendedPath(appId)
+            // Fall through to the relaunch path below
+        }
+
         if appId.hasSuffix(".app") {
             let url = URL(fileURLWithPath: appId)
             let alreadyRunning = NSWorkspace.shared.runningApplications.contains {
@@ -337,11 +451,205 @@ final class ProcessKiller: ObservableObject {
     /// category (application, launch agent, service, or custom process).
     private func terminate(_ app: AppItem) -> Bool {
         switch app.category {
-        case .application:  return killApplication(app)
+        case .application:  return terminateApplication(app)
         case .launchAgent:  return unloadLaunchAgent(app)
         case .service:      return stopService(app)
-        case .custom:       return killProcessByPid(app)
+        case .custom:       return terminateCustom(app)
         }
+    }
+
+    /// Terminates a custom (or system XPC/helper) process. In `.suspend`
+    /// mode it is `SIGSTOP`-frozen so it can be `SIGCONT`-resumed in place on
+    /// AC (the only way to restore a process that has no launch mechanism).
+    /// Otherwise it uses the existing PID kill chain.
+    private func terminateCustom(_ app: AppItem) -> Bool {
+        if app.suspendStrategy == .suspend {
+            return suspendApp(app)
+        }
+        return killProcessByPid(app)
+    }
+
+    /// Terminates a GUI application according to its per-app suspend strategy.
+    /// `.suspend`/`.graceful` fall back to the force chain on failure so a
+    /// batch never stalls on an app that can't be preserved.
+    private func terminateApplication(_ app: AppItem) -> Bool {
+        switch app.suspendStrategy {
+        case .suspend:  return suspendApp(app)
+        case .graceful: return terminateGracefully(app)
+        case .force:    return killApplication(app)
+        }
+    }
+
+    /// Freezes a GUI application via `SIGSTOP` (suspend mode), preserving its
+    /// exact state in memory. On success the path is tracked in `suspendedPaths`
+    /// for AC-time `SIGCONT` resume. Falls back to graceful, then force.
+    ///
+    /// Before freezing, the app's windows are hidden (`NSRunningApplication.hide`)
+    /// so a frozen (SIGSTOP) app does not leave a dead window covering the screen.
+    /// Hiding is best-effort and non-fatal: if it fails, suspension still proceeds.
+    private func suspendApp(_ app: AppItem) -> Bool {
+        guard let pid = pidFor(app) else {
+            logger("suspendApp: no PID for \(app.name), falling back to graceful")
+            return terminateGracefully(app)
+        }
+        let hid = hideApp(app)
+        if kill(pid, SIGSTOP) == 0 {
+            addSuspendedPath(app.path)
+            logger("suspendApp: SIGSTOP pid=\(pid) \(app.name)\(hid ? " (window hidden)" : "")")
+            return true
+        }
+        logger("suspendApp: SIGSTOP failed for \(app.name), falling back to graceful")
+        return terminateGracefully(app)
+    }
+
+    /// Hides a GUI application's windows before it is suspended, so a frozen
+    /// (SIGSTOP) app does not leave a dead window covering the screen.
+    /// Uses AppleScript `set visible` (System Events) as the primary mechanism
+    /// -- verified reliable for normal GUI apps -- with `NSRunningApplication.hide()`
+    /// as a fallback. Best-effort: returns success; failure is non-fatal
+    /// (suspension still proceeds).
+    private func hideApp(_ app: AppItem) -> Bool {
+        guard app.category == .application else { return false }
+        if setAppVisible(app, visible: false) {
+            // The AppleScript returns once the hide event is handled, but the
+            // window-hide animation may still be playing. Wait for it to finish
+            // before SIGSTOP, so the frozen app's window is fully off-screen.
+            Thread.sleep(forTimeInterval: 0.8)
+            return true
+        }
+        // Fallback: NSRunningApplication.hide() (reliable in a GUI app context).
+        if let running = runningApp(for: app), running.hide() {
+            return true
+        }
+        logger("hideApp: failed to hide \(app.name), proceeding without hiding")
+        return false
+    }
+
+    /// Unhides a GUI application after it is resumed (SIGCONT), restoring the
+    /// windows that were hidden before suspension. Idempotent -- no-op if the
+    /// app was not hidden or is not a `.application`.
+    private func unhideApp(_ app: AppItem) {
+        guard app.category == .application else { return }
+        if setAppVisible(app, visible: true) {
+            return
+        }
+        if let running = runningApp(for: app), running.isHidden {
+            running.unhide()
+        }
+    }
+
+    /// Sets an app's visibility via AppleScript `System Events`, matched by the
+    /// app's **executable name** (`processName`, i.e. `CFBundleExecutable`).
+    /// System Events' `name` attribute is the process/executable name, which is
+    /// NOT the display name (`app.name`) -- apps like WeCom show "wecom" in the
+    /// list but their process name is "企业微信", so matching by display name
+    /// fails (-1719) and the window stays visible over a frozen process.
+    /// Returns whether the script reported success.
+    private func setAppVisible(_ app: AppItem, visible: Bool) -> Bool {
+        runAppleScript(appVisibilityScript(appName: appVisibilityMatchName(app), visible: visible))
+    }
+
+    /// Runs an AppleScript via `osascript`, returning whether it succeeded.
+    /// Bounded by a timeout so a hung `osascript` (e.g. unresponsive System
+    /// Events) cannot stall the suspend/restore flow indefinitely.
+    private func runAppleScript(_ script: String) -> Bool {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", script]
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            let deadline = Date().addingTimeInterval(5.0)
+            while proc.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if proc.isRunning {
+                proc.terminate()
+                logger("runAppleScript: osascript timed out after 5s")
+                return false
+            }
+            return proc.terminationStatus == 0
+        } catch {
+            logger("runAppleScript: failed to launch osascript: \(error)")
+            return false
+        }
+    }
+
+    /// Resolves the `NSRunningApplication` for an app, preferring the cached
+    /// PID, then bundle identifier.
+    private func runningApp(for app: AppItem) -> NSRunningApplication? {
+        if let pid = app.pid, let running = NSRunningApplication(processIdentifier: pid) {
+            return running
+        }
+        if let bid = app.bundleIdentifier {
+            return NSRunningApplication.runningApplications(withBundleIdentifier: bid).first
+        }
+        return nil
+    }
+
+    /// Gracefully quits a GUI application with an extended wait so the app can
+    /// persist its own state (autosave / resume), then escalates to force.
+    /// The extended wait (`gracefulWaitSeconds`, 2.0s vs 0.3s in
+    /// `killApplication`) gives state-saving apps time to write documents
+    /// before the process exits.
+    private func terminateGracefully(_ app: AppItem) -> Bool {
+        if let bid = app.bundleIdentifier {
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: bid)
+            running.forEach { $0.terminate() }
+            Thread.sleep(forTimeInterval: gracefulWaitSeconds)
+            if NSRunningApplication.runningApplications(withBundleIdentifier: bid).isEmpty { return true }
+
+            // Escalate: force terminate, then direct signals, then killall
+            running.forEach { $0.forceTerminate() }
+            Thread.sleep(forTimeInterval: 0.3)
+            if NSRunningApplication.runningApplications(withBundleIdentifier: bid).isEmpty { return true }
+        }
+
+        if let pid = app.pid {
+            kill(pid, SIGTERM)
+            Thread.sleep(forTimeInterval: 0.2)
+            if !isAlive(pid) { return true }
+            kill(pid, SIGKILL)
+            Thread.sleep(forTimeInterval: 0.2)
+            if !isAlive(pid) { return true }
+        }
+
+        return killall(app.processName)
+    }
+
+    /// Resolves the PID for an app, preferring the cached `app.pid`, then
+    /// `NSRunningApplication` by bundle identifier.
+    private func pidFor(_ app: AppItem) -> Int32? {
+        if let pid = app.pid { return pid }
+        if let bid = app.bundleIdentifier,
+           let running = NSRunningApplication.runningApplications(withBundleIdentifier: bid).first {
+            return running.processIdentifier
+        }
+        return nil
+    }
+
+    /// Resolves the current PID for an app path, preferring the freshly
+    /// refreshed app list, then `NSRunningApplication` by bundle URL.
+    private func currentPid(for appId: String, using apps: [AppItem]) -> Int32? {
+        if let app = apps.first(where: { $0.id == appId }), let pid = app.pid {
+            return pid
+        }
+        for running in NSWorkspace.shared.runningApplications {
+            if running.bundleURL?.path == appId {
+                return running.processIdentifier
+            }
+        }
+        return nil
+    }
+
+    /// Resolves a display name for an app id from the app list, or falls back
+    /// to the `.app` bundle name.
+    private func displayName(for appId: String, using apps: [AppItem]) -> String {
+        if let app = apps.first(where: { $0.id == appId }) {
+            return app.name
+        }
+        return (appId as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
     }
 
     /// Force-kills a GUI application using escalating strategies:
@@ -662,13 +970,4 @@ final class ProcessKiller: ObservableObject {
             trigger: nil
         ))
     }
-}
-
-/// Escapes a string for safe embedding in an AppleScript string literal:
-/// backslash → `\\`, double quote → `\"`, newline → `\n`. Extracted so the
-/// escaping rules are unit-testable.
-func escapeAppleScriptText(_ str: String) -> String {
-    str.replacingOccurrences(of: "\\", with: "\\\\")
-       .replacingOccurrences(of: "\"", with: "\\\"")
-       .replacingOccurrences(of: "\n", with: "\\n")
 }

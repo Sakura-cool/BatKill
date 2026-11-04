@@ -177,10 +177,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             processKiller: processKiller, lm: localizationManager)
         mgr.setPopoverContent(pv)
 
-        // 2. Begin scanning installed applications.
+        // 2. Clean up any stale config referencing core macOS system components
+        //    (v0.2.4 CHANGE-060). Unfreezes suspended core components and removes
+        //    them from all persisted keys so erroneous config no longer takes
+        //    effect. Runs before the app list is refreshed.
+        SystemCoreProtection.cleanupPersistedConfig()
+
+        // 3. Begin scanning installed applications.
         appLister.refreshAppList()
 
-        // 3. Request notification authorization once at launch (instead of
+        // 4. Request notification authorization once at launch (instead of
         //    per-kill/restore, which would spam the user with permission prompts).
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, error in
             if let error = error {

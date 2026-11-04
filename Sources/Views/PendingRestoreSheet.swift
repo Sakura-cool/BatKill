@@ -34,14 +34,14 @@ struct PendingRestoreSheet: View {
     // MARK: - Computed
 
     /// Resolves each pending restore ID into a display tuple of
-    /// (id, display name, category). Falls back to the file's
+    /// (id, display name, category, isSuspended). Falls back to the file's
     /// last path component if the app is no longer in the app list.
-    private var pendingApps: [(id: String, name: String, category: AppCategory)] {
+    private var pendingApps: [(id: String, name: String, category: AppCategory, isSuspended: Bool)] {
         processKiller.pendingRestoreAppIds.compactMap { appId in
             if let app = appLister.apps.first(where: { $0.id == appId }) {
-                return (appId, app.name, app.category)
+                return (appId, app.name, app.category, processKiller.suspendedAppIds.contains(appId))
             }
-            return (appId, (appId as NSString).lastPathComponent, .custom)
+            return (appId, (appId as NSString).lastPathComponent, .custom, processKiller.suspendedAppIds.contains(appId))
         }
     }
 
@@ -84,22 +84,34 @@ struct PendingRestoreSheet: View {
                                     .foregroundColor(.secondary)
                                     .frame(width: 20, height: 20)
 
-                                // Name + category label
+                                // Name + category label + pending type
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(item.name)
                                         .font(.subheadline)
                                         .lineLimit(1)
-                                    Text(categoryLabel(for: item.category))
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+                                    HStack(spacing: 4) {
+                                        Text(categoryLabel(for: item.category))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        // Distinguish suspended (SIGCONT resume) from
+                                        // killed (relaunch) pending apps.
+                                        Text(item.isSuspended
+                                             ? lm.translate("Suspended · will resume", "已挂起 · 待解冻")
+                                             : lm.translate("Stopped · will relaunch", "已停止 · 待重启"))
+                                            .font(.caption2)
+                                            .foregroundColor(item.isSuspended ? .yellow : .secondary)
+                                    }
                                 }
 
                                 Spacer()
 
-                                // Delete -- removes from pending list without restoring
+                                // Delete -- removes from pending list without restoring.
+                                // For a suspended (SIGSTOP-frozen) app, this also
+                                // terminates the frozen process outright (deleting
+                                // means the user no longer wants it resumed).
                                 Button {
                                     withAnimation {
-                                        processKiller.removePending(item.id)
+                                        processKiller.removePending(item.id, using: appLister.apps)
                                     }
                                 } label: {
                                     Text(lm.translate("Delete", "删除"))
