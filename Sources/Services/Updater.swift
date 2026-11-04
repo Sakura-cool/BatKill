@@ -178,6 +178,16 @@ final class Updater: ObservableObject {
     /// Selects the correct asset (arm64 vs x86_64) based on the
     /// current architecture.
     func downloadAndInstall() {
+        // Guard against concurrent downloads: both the title-bar version label
+        // (isManualUpdateInFlight lock only covers that entry) and the settings
+        // "Update" button call this directly. Without this guard a second click
+        // spawns a second downloadTask that is never cancelled, resets progress
+        // to 0, and overrides the KVO observation — looking like the first
+        // download was "interrupted and restarted".
+        guard !isDownloading else {
+            logger("Updater: download already in progress, skipping duplicate")
+            return
+        }
         guard let tagName = checker.latestVersion else { return }
         let assetName = "BatKill-\(currentArch()).dmg"
         let downloadURL = "https://github.com/Sakura-cool/BatKill/releases/download/v\(tagName)/\(assetName)"

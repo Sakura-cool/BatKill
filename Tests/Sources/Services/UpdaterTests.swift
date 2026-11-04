@@ -42,5 +42,17 @@ final class UpdaterTests: TestCase {
             XCTAssertTrue(compareVersions("0.1.x", "0.1.9"), "非数字 local 段按 0")
             XCTAssertFalse(compareVersions("0.1.9", "0.1.x"), "非数字 remote 段按 0")
         }
+
+        runTest("downloadAndInstall：下载中再次调用被防重拦截") {
+            let checker = VersionChecker()
+            let updater = Updater(checker: checker)
+            checker.latestVersion = "0.2.5"
+            updater.isDownloading = true          // 模拟已有下载在进行
+            updater.statusMessage = "busy"
+            updater.downloadAndInstall()          // 应被 guard 拦截，不启动第二个下载
+            XCTAssertEqual(updater.statusMessage, "busy",
+                           "下载中再次调用不应重置状态（被防重拦截）")
+            XCTAssertTrue(updater.isDownloading, "下载状态保持不变，不重复启动")
+        }
     }
 }
