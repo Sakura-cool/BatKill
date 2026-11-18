@@ -81,15 +81,25 @@ build_arch() {
   # it has its own @main and is compiled separately (CHANGE-019).
   SWIFT_FILES=$(find "$SRC_DIR" -name '*.swift' ! -name 'BatKillFanCLI.swift' | sort)
 
-  # ── Architecture-specific optimization flags ──
-  # arm64: enable long-function diagnostics (catches slow compilations)
-  # x86_64: enable VZEROUPPER (AVX-SSE transition penalty avoidance)
-  # Both: Ounchecked removes bounds & overflow checks for release builds
-  OPT_FLAGS="-Ounchecked -whole-module-optimization"
-  if [ "$arch" = "arm64" ]; then
-    OPT_FLAGS="$OPT_FLAGS -Xfrontend -warn-long-function-bodies=1000 -Xfrontend -warn-long-expression-type-checking=1000"
-  elif [ "$arch" = "x86_64" ]; then
-    OPT_FLAGS="$OPT_FLAGS -Xllvm -x86-use-vzeroupper"
+  # ── Optimization flags: dev vs release (CHANGE-081) ──
+  # Dev (本地调试, 默认): -O keeps integer/bounds checks so logic bugs surface
+  # locally; arm64 long-function diagnostics catch slow compilations; no WMO/LTO
+  # (faster incremental builds, and per-machine arch only).
+  # Release (--dmg, 远程发版): targeted aggressive optimization — -Ounchecked +
+  # whole-module-optimization + thin LTO (cross-file inlining/devirtualization at
+  # link time); dev-only diagnostics dropped.
+  if [ "$BUILD_DMG" = true ]; then
+    OPT_FLAGS="-Ounchecked -whole-module-optimization -lto=llvm-thin"
+    if [ "$arch" = "x86_64" ]; then
+      OPT_FLAGS="$OPT_FLAGS -Xllvm -x86-use-vzeroupper"
+    fi
+  else
+    OPT_FLAGS="-O"
+    if [ "$arch" = "arm64" ]; then
+      OPT_FLAGS="$OPT_FLAGS -Xfrontend -warn-long-function-bodies=1000 -Xfrontend -warn-long-expression-type-checking=1000"
+    elif [ "$arch" = "x86_64" ]; then
+      OPT_FLAGS="$OPT_FLAGS -Xllvm -x86-use-vzeroupper"
+    fi
   fi
 
   # Debug logging (`-DDEBUG` → `#if DEBUG`) is compiled in ONLY for dev builds
