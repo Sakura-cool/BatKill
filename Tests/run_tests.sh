@@ -37,10 +37,12 @@ fi
 
 # ── Collect source files ──
 # Main source files (needed for the types we're testing)
-# Exclude entry-point files (entry point is TestMain.swift)
+# Exclude entry-point files (entry point is TestMain.swift).
+# AppDelegate stays included: SettingsView now references it as an
+# @EnvironmentObject, so the type must be visible to the test target.
+# AppDelegate is a plain class (no @main, references no excluded symbol).
 MAIN_SOURCES=$(find "$SRC_DIR" -name '*.swift' \
   | grep -v 'BatKillApp.swift' \
-  | grep -v 'AppDelegate.swift' \
   | grep -v 'Main.swift' \
   | grep -v 'main.swift' \
   | grep -v 'BatKillFanCLI.swift' \

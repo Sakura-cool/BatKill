@@ -35,6 +35,9 @@ struct SettingsView: View {
     @EnvironmentObject var versionChecker: VersionChecker
     @EnvironmentObject var updater: Updater
     @EnvironmentObject var hardwareMonitor: HardwareMonitor
+    /// The app delegate, which exposes the power contact-issue dialog state
+    /// (`showContactIssueDialog` + `resolveContactIssue(_:)`, design-spec §6.2).
+    @EnvironmentObject var appDelegate: AppDelegate
 
     // MARK: - Persisted Preferences
 
@@ -57,6 +60,8 @@ struct SettingsView: View {
     @State private var showSelectedSheet = false
     /// Controls presentation of the "Pending Restore" sheet.
     @State private var showPendingRestoreSheet = false
+    /// Controls presentation of the "Bulk Quick Restore" confirmation alert.
+    @State private var showBulkRestoreConfirm = false
     /// Timer that keeps the header temperature badge updating while the
     /// settings window is open, even if the Temperature window never opened.
     @State private var hardwareRefreshTimer: Timer?
@@ -111,6 +116,53 @@ struct SettingsView: View {
         .frame(width: 500, height: 640)
         .onAppear { startHardwareRefresh() }
         .onDisappear { stopHardwareRefresh() }
+        .alert(
+            lm.translate("Bulk restore may cause temporary stutter", "批量恢复可能造成短暂卡顿"),
+            isPresented: $showBulkRestoreConfirm
+        ) {
+            Button(lm.translate("Cancel", "取消"), role: .cancel) {}
+            Button(lm.translate("Restore", "恢复")) {
+                processKiller.restoreKilledApps(using: appLister.apps) { appLister.refreshAppList() }
+            }
+        } message: {
+            Text(lm.translate("Restore all pending apps now?", "确定立即恢复全部待恢复软件？"))
+        }
+        .alert(
+            lm.translate("Power contact unstable", "电源接触不良"),
+            isPresented: Binding(
+                get: { appDelegate.showContactIssueDialog },
+                set: { newValue in
+                    if !newValue {
+                        // Passive dismissal (Esc / click-away) with no explicit
+                        // button choice defaults to the safe action: pause restore.
+                        if appDelegate.showContactIssueDialog {
+                            appDelegate.resolveContactIssue(.pause)
+                        } else {
+                            appDelegate.showContactIssueDialog = false
+                        }
+                    }
+                }
+            )
+        ) {
+            // Pause restore -- safe default (Enter).
+            Button(lm.translate("Pause restore", "暂停恢复")) {
+                appDelegate.resolveContactIssue(.pause)
+            }
+            .keyboardShortcut(.defaultAction)
+            // Ignore the unstable contact and continue the restore sequence.
+            Button(lm.translate("Ignore & continue restore", "继续忽略异常，继续恢复")) {
+                appDelegate.resolveContactIssue(.ignore)
+            }
+            // Stop -- cancel restore, keep apps stopped, keep pending list.
+            Button(lm.translate("Stop", "停止"), role: .destructive) {
+                appDelegate.resolveContactIssue(.stop)
+            }
+        } message: {
+            Text(lm.translate(
+                "Repeated power switching detected — possible loose contact",
+                "检测到电源反复切换，可能接触不良"
+            ))
+        }
     }
 
     /// Refreshes sensor data on appear and keeps the temperature badge live
@@ -421,15 +473,52 @@ struct SettingsView: View {
                 .disabled(processKiller.isKilling
                           || !appLister.apps.contains(where: { $0.isSelected && $0.isRunning }))
 
-                // Restore Selected -- restarts previously killed apps
-                Button { processKiller.restoreSelected(appLister.apps, selectedPaths: appLister.selectedAppPaths) { appLister.refreshAppList() } } label: {
-                    Label(lm.translate("Restore Selected", "恢复选中"), systemImage: "arrow.clockwise")
+                // Restore Sequentially -- serial, ordered restore of all pending
+                // apps (safe default path, no confirmation needed per AC-606).
+                Button {
+                    processKiller.restoreSequential(using: appLister.apps) { appLister.refreshAppList() }
+                } label: {
+                    Label(lm.translate("Restore Sequentially", "依次恢复"), systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption)
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.small)
                 .tint(.green)
                 .disabled(processKiller.isRestoring
                           || processKiller.pendingRestoreCount == 0)
+                .help(lm.translate(
+                    "Restore pending apps one at a time",
+                    "依次恢复待恢复软件（逐个有序）"
+                ))
+
+                // Bulk Quick Restore -- restore all pending apps at once. Requires
+                // confirmation because launching many apps may cause a brief stutter.
+                Button { showBulkRestoreConfirm = true } label: {
+                    Label(lm.translate("Bulk Quick Restore", "批量快速恢复"), systemImage: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.green)
+                .disabled(processKiller.isRestoring
+                          || processKiller.pendingRestoreCount == 0)
+                .help(lm.translate(
+                    "Restore all pending apps at once (may stutter)",
+                    "一次性恢复全部待恢复软件（可能造成卡顿）"
+                ))
+
+                // Low-battery gate hint (secondary position). Auto-restore is
+                // delayed below 20% while on AC; manual buttons stay enabled.
+                if isRestoreGateDelayed
+                    && processKiller.pendingRestoreCount > 0
+                    && !processKiller.isRestoring {
+                    Label(
+                        lm.translate("Battery low, auto-restore resumes at ≥20%", "电量不足，≥20% 后自动恢复"),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+                }
 
                 if processKiller.isKilling {
                     ProgressView().controlSize(.small).frame(width: 12)
@@ -438,6 +527,12 @@ struct SettingsView: View {
                 if processKiller.isRestoring {
                     ProgressView().controlSize(.small).frame(width: 12)
                 }
+            }
+
+            // Restore progress row (only visible while a restore sequence runs).
+            // Inserted between the action row and the bottom row per design-spec §2.2.
+            if processKiller.isRestoring {
+                RestoreProgressRow(processKiller: processKiller, lm: lm)
             }
 
             // Bottom row: language + auto-start + update
@@ -490,6 +585,14 @@ struct SettingsView: View {
     // MARK: - Actions
     // ──────────────────────────────────────────────
 
+    /// True when the low-battery auto-restore gate is active (auto-restore
+    /// delayed below 20% while on AC). Drives the secondary gate hint; the
+    /// manual restore buttons remain enabled regardless (AC-601/AC-608).
+    private var isRestoreGateDelayed: Bool {
+        if case .delayedLowBattery = processKiller.restoreGateState { return true }
+        return false
+    }
+
     /// Toggles selection for all non-system apps. If all are currently
     /// selected, deselects all. Otherwise, selects all.
     private func toggleAll() {
@@ -519,3 +622,56 @@ struct SettingsView: View {
 }
 
 // Binding.onChange helper is defined in Core/Extensions.swift
+
+// MARK: - Restore Progress Row
+
+/// Full-width linear progress row shared by SettingsView and PendingRestoreSheet.
+/// Reads progress directly from ProcessKiller's @Published fields, so both
+/// surfaces share the same restore-progress source (design-spec §2.2 / §4.2).
+struct RestoreProgressRow: View {
+    /// The process killer publishing restore progress.
+    @ObservedObject var processKiller: ProcessKiller
+    /// Localization manager for translating labels.
+    @ObservedObject var lm: LocalizationManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ProgressView(
+                value: Double(processKiller.restoreDone),
+                total: Double(max(processKiller.restoreTotal, 1))
+            )
+            .progressViewStyle(.linear)
+            .controlSize(.small)
+            .tint(.green)
+
+            Text(progressCaption)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Progress caption driven by `restorePhase`. Batch mode never settles in
+    /// `.waiting`, so the interval segment naturally hides for bulk restores.
+    private var progressCaption: String {
+        let restored = lm.translate(
+            "Restored %d / %d",
+            "已恢复 %d / %d",
+            processKiller.restoreDone,
+            processKiller.restoreTotal
+        )
+        switch processKiller.restorePhase {
+        case .waiting(let intervalSec):
+            let name = processKiller.nextRestoreName ?? "—"
+            let next = lm.translate("Next: %@", "下一个：%@", name)
+            let interval = lm.translate("Interval %ds", "间隔 %ds", Int(intervalSec))
+            return "\(restored) · \(next) · \(interval)"
+        case .restoring(let name):
+            let restoring = lm.translate("Restoring %@…", "正在恢复 %@…", name)
+            return "\(restored) · \(restoring)"
+        case .idle:
+            return restored
+        }
+    }
+}

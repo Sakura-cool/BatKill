@@ -49,6 +49,41 @@ final class ProcessKiller: ObservableObject {
     /// Includes both killed apps (to relaunch) and suspended apps (to resume).
     @Published var pendingRestoreCount: Int = 0
 
+    // MARK: - Restore Progress & Gating (v0.2.6)
+
+    /// Apps restored so far in the current restore sequence.
+    @Published var restoreDone: Int = 0
+
+    /// Total apps in the current restore sequence (0 = idle).
+    @Published var restoreTotal: Int = 0
+
+    /// Name of the next app to restore (valid during the wait interval).
+    @Published var nextRestoreName: String?
+
+    /// Current restore phase (waiting / restoring / idle) — drives the UI
+    /// progress caption and the wait-interval segment.
+    @Published var restorePhase: RestorePhase = .idle
+
+    /// Auto-restore gate state (low-battery / contact-issue / in-progress).
+    /// Only the automatic restore path (AppDelegate) is gated; manual entries
+    /// (UI buttons) bypass it.
+    @Published var restoreGateState: RestoreGateState = .idle
+
+    /// Whether the current restore was started manually (UI entry). When true,
+    /// the AppDelegate's battery-percentage auto-pause logic (AC-615~617) is
+    /// skipped so a manual sequence is never blocked mid-run.
+    @Published var manualRestoreOverride: Bool = false
+
+    /// Cancellation flag for the in-flight restore sequence. Checked at the
+    /// start of each iteration; when set, remaining apps are left in the
+    /// pending list (interrupted restore, AC-612/AC-613).
+    var restoreCancelled = false
+
+    /// Session token for the restore sequence. Incremented on each start; a
+    /// stale sequence's completion skips state application so an old run can
+    /// never clobber a newer one's `isRestoring`/`restorePhase`.
+    var restoreSession = 0
+
     /// Seconds to wait for a graceful `terminate()` before escalating to force
     /// in `.graceful` mode. Longer than the 0.3s used by `killApplication`
     /// (the force-chain fallback) so state-saving apps can persist their work.
@@ -66,7 +101,7 @@ final class ProcessKiller: ObservableObject {
     /// Paths of apps that were killed by BatKill and should be restored
     /// when AC power returns. Backed by UserDefaults for crash safety.
     /// Only includes apps that were successfully terminated.
-    private var killedRestorePaths: [String] {
+    var killedRestorePaths: [String] {
         get { UserDefaults.standard.stringArray(forKey: "killedRestorePaths") ?? [] }
         set {
             DispatchQueue.main.async {
@@ -87,7 +122,7 @@ final class ProcessKiller: ObservableObject {
     /// the same background operation (e.g. `killSelected` checking
     /// `isSuspendedPath`) see the just-suspended path immediately. Only the
     /// `@Published` count update is dispatched to the main thread.
-    private var suspendedPaths: [String] {
+    var suspendedPaths: [String] {
         get { UserDefaults.standard.stringArray(forKey: "suspendedPaths") ?? [] }
         set {
             UserDefaults.standard.set(newValue, forKey: "suspendedPaths")
@@ -186,6 +221,8 @@ final class ProcessKiller: ObservableObject {
             return
         }
         logger("restoreSelected: restoring \(toRestore)")
+        // Manual selective entry: ignore auto gate/pause (AC-608/AC-618).
+        manualRestoreOverride = true
         isRestoring = true
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -211,6 +248,7 @@ final class ProcessKiller: ObservableObject {
                     self.suspendedPaths = remainingSuspended
                 }
                 self.restoreCount += restoredNames.count
+                self.manualRestoreOverride = false
                 self.isRestoring = false
                 if !restoredNames.isEmpty {
                     self.postRestoreNotification(names: restoredNames)
@@ -241,6 +279,10 @@ final class ProcessKiller: ObservableObject {
             return
         }
         ctx.log("开始终止 \(selected.count) 个应用: \(selected.map(\.name).joined(separator: ", "))")
+
+        // A kill (manual "Stop Selected" or auto battery switch) interrupts any
+        // in-flight restore sequence; un-restored apps stay pending (AC-612/613).
+        cancelRestore()
 
         isKilling = true
 
@@ -277,7 +319,7 @@ final class ProcessKiller: ObservableObject {
                 self.lastKillResults = results
                 self.killCount += results.values.filter { $0 }.count
                 self.isKilling = false
-                self.postKillNotification(results: results)
+                self.postKillNotification(apps: selected, results: results)
                 completion?()
             }
         }
@@ -301,22 +343,42 @@ final class ProcessKiller: ObservableObject {
             DispatchQueue.main.async { completion?() }
             return
         }
-        ctx.log("开始恢复 \(paths.count) 个应用")
+        ctx.log("开始批量恢复 \(paths.count) 个应用")
+
+        // Manual batch entry (UI "Bulk Quick Restore"): ignore auto gate/pause
+        // (AC-608/AC-618). Progress fields drive the shared RestoreProgressRow.
+        manualRestoreOverride = true
+        restoreCancelled = false
+        let session = restoreSession + 1
+        restoreSession = session
         isRestoring = true
+        restoreGateState = .restoring
+        restoreTotal = paths.count
+        restoreDone = 0
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             var restoredNames: [String] = []
             var restoredIds: [String] = []
 
-            for appId in paths {
+            for (i, appId) in paths.enumerated() {
+                // Batch loop has no wait points; honor cancellation between items.
+                if self.restoreCancelled { break }
+                let name = self.displayName(for: appId, using: apps)
+                DispatchQueue.main.async {
+                    self.restorePhase = .restoring(name: name)
+                    self.nextRestoreName = name
+                }
                 let restoreCtx = ctx.child("restoreSingle")
-                if let name = self.restoreSingleApp(appId, using: apps) {
-                    restoredNames.append(name)
+                if let restoredName = self.restoreSingleApp(appId, using: apps) {
+                    restoredNames.append(restoredName)
                     restoredIds.append(appId)
-                    restoreCtx.log("恢复 \(name) 成功")
+                    restoreCtx.log("恢复 \(restoredName) 成功")
                 } else {
                     restoreCtx.log("恢复 \(appId) 失败")
+                }
+                DispatchQueue.main.async {
+                    self.restoreDone = i + 1
                 }
             }
 
@@ -325,8 +387,6 @@ final class ProcessKiller: ObservableObject {
             DispatchQueue.main.async {
                 if !restoredIds.isEmpty {
                     // Clear restored ids from both the relaunch and resume sets.
-                    // `restoreSingleApp` already removes suspended entries, so the
-                    // remaining removal here is idempotent for both lists.
                     var remainingKilled = self.killedRestorePaths
                     remainingKilled.removeAll { restoredIds.contains($0) }
                     self.killedRestorePaths = remainingKilled
@@ -334,10 +394,25 @@ final class ProcessKiller: ObservableObject {
                     remainingSuspended.removeAll { restoredIds.contains($0) }
                     self.suspendedPaths = remainingSuspended
                 }
+                // A stale sequence (superseded by a newer start) must not clobber
+                // the newer run's state; its list cleanup above is still applied.
+                guard self.restoreSession == session else {
+                    completion?()
+                    return
+                }
                 self.restoreCount += restoredNames.count
+                let wasCancelled = self.restoreCancelled
+                self.restoreCancelled = false
+                self.manualRestoreOverride = false
                 self.isRestoring = false
-                if !restoredNames.isEmpty {
-                    self.postRestoreNotification(names: restoredNames)
+                self.restorePhase = .idle
+                self.nextRestoreName = nil
+                // Preserve an externally-set low-battery gate (AC-617).
+                if self.restoreGateState != .delayedLowBattery { self.restoreGateState = (wasCancelled || restoredIds.isEmpty) ? .idle : .completed }
+                self.restoreTotal = 0
+                self.restoreDone = 0
+                if !restoredNames.isEmpty && !wasCancelled {
+                    self.postRestoreNotification(mode: .batch, count: restoredNames.count)
                 }
                 completion?()
             }
@@ -353,7 +428,7 @@ final class ProcessKiller: ObservableObject {
     /// - `.application`: `NSWorkspace.shared.open()` (skips if already running)
     /// - `.launchAgent`: `launchctl bootstrap gui/<uid>/<path>`
     /// - `.service`: direct start -> brew services start -> launchctl bootstrap
-    private func restoreSingleApp(_ appId: String, using apps: [AppItem]) -> String? {
+    func restoreSingleApp(_ appId: String, using apps: [AppItem]) -> String? {
         // Suspend mode: `SIGCONT` resume the frozen process in place, preserving
         // its exact state. If the process is gone (rebooted / manually quit),
         // remove it from the suspended set and fall back to a fresh relaunch.
@@ -645,7 +720,7 @@ final class ProcessKiller: ObservableObject {
 
     /// Resolves a display name for an app id from the app list, or falls back
     /// to the `.app` bundle name.
-    private func displayName(for appId: String, using apps: [AppItem]) -> String {
+    func displayName(for appId: String, using apps: [AppItem]) -> String {
         if let app = apps.first(where: { $0.id == appId }) {
             return app.name
         }
@@ -921,53 +996,5 @@ final class ProcessKiller: ObservableObject {
     /// Escapes special characters in a string for safe embedding in AppleScript.
     private func escapeAppleScript(_ str: String) -> String {
         escapeAppleScriptText(str)
-    }
-
-    // MARK: - Notifications
-
-    /// Posts a user notification summarizing which apps were killed
-    /// and which failed. Notification authorization is requested once at launch.
-    private func postKillNotification(results: [String: Bool]) {
-        let killed = results.filter { $0.value }.map { $0.key }
-        let failed = results.filter { !$0.value }.map { $0.key }
-
-        var bodyParts: [String] = []
-        if !killed.isEmpty {
-            bodyParts.append(loc("✅ Terminated:", "✅ 已停止:") + " " + killed.joined(separator: ", "))
-        }
-        if !failed.isEmpty {
-            bodyParts.append(loc("❌ Failed:", "❌ 失败:") + " " + failed.joined(separator: ", "))
-        }
-        let body = bodyParts.joined(separator: "\n")
-
-        let center = UNUserNotificationCenter.current()
-        let content = UNMutableNotificationContent()
-        content.title = "BatKill"
-        content.body = body
-        content.sound = .default
-
-        center.add(UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil
-        ))
-    }
-
-    /// Posts a user notification listing the names of apps restored
-    /// when AC power was detected.
-    private func postRestoreNotification(names: [String]) {
-        guard !names.isEmpty else { return }
-        let center = UNUserNotificationCenter.current()
-
-        let content = UNMutableNotificationContent()
-        content.title = "BatKill"
-        content.body = loc("✅ Restored on AC:", "✅ 已恢复:") + " " + names.joined(separator: ", ")
-        content.sound = .default
-
-        center.add(UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil
-        ))
     }
 }

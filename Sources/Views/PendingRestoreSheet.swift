@@ -31,7 +31,18 @@ struct PendingRestoreSheet: View {
     /// Environment dismiss action to close the sheet.
     @Environment(\.dismiss) private var dismiss
 
+    /// Controls presentation of the "Bulk Quick Restore" confirmation alert.
+    @State private var showBulkRestoreConfirm = false
+
     // MARK: - Computed
+
+    /// True when the low-battery auto-restore gate is active (auto-restore
+    /// delayed below 20% while on AC). Drives the gate banner; the manual
+    /// restore buttons stay enabled regardless (AC-601/AC-608).
+    private var isRestoreGateDelayed: Bool {
+        if case .delayedLowBattery = processKiller.restoreGateState { return true }
+        return false
+    }
 
     /// Resolves each pending restore ID into a display tuple of
     /// (id, display name, category, isSuspended). Falls back to the file's
@@ -59,6 +70,12 @@ struct PendingRestoreSheet: View {
                     .foregroundColor(.secondary)
             }
             .padding()
+
+            // Low-battery gate banner (main position) -- shown while auto-restore
+            // is delayed below 20% and there are pending apps to restore.
+            if isRestoreGateDelayed && !pendingApps.isEmpty {
+                gateBanner
+            }
 
             Divider()
 
@@ -144,11 +161,41 @@ struct PendingRestoreSheet: View {
                 }
             }
 
+            // Restore progress row (shared with SettingsView, §4.2)
+            if processKiller.isRestoring {
+                RestoreProgressRow(processKiller: processKiller, lm: lm)
+                    .padding(.horizontal)
+                    .padding(.top, 6)
+            }
+
             Divider()
 
-            // Done button -- refreshes app list and dismisses
-            HStack {
+            // Bottom action area: sequential / bulk restore + Done.
+            // Sequential is the safe default (no confirmation); bulk restore
+            // requires confirmation since it may cause a brief stutter.
+            HStack(spacing: 8) {
+                Button {
+                    processKiller.restoreSequential(using: appLister.apps) { appLister.refreshAppList() }
+                } label: {
+                    Text(lm.translate("Restore Sequentially", "依次恢复"))
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.green)
+                .disabled(processKiller.isRestoring || pendingApps.isEmpty)
+
+                Button { showBulkRestoreConfirm = true } label: {
+                    Text(lm.translate("Bulk Quick Restore", "批量快速恢复"))
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.green)
+                .disabled(processKiller.isRestoring || pendingApps.isEmpty)
+
                 Spacer()
+
                 Button(lm.translate("Done", "完成")) {
                     appLister.refreshAppList()
                     dismiss()
@@ -159,9 +206,41 @@ struct PendingRestoreSheet: View {
             .padding()
         }
         .frame(width: 400, height: 400)
+        .alert(
+            lm.translate("Bulk restore may cause temporary stutter", "批量恢复可能造成短暂卡顿"),
+            isPresented: $showBulkRestoreConfirm
+        ) {
+            Button(lm.translate("Cancel", "取消"), role: .cancel) {}
+            Button(lm.translate("Restore", "恢复")) {
+                processKiller.restoreKilledApps(using: appLister.apps) { appLister.refreshAppList() }
+            }
+        } message: {
+            Text(lm.translate("Restore all pending apps now?", "确定立即恢复全部待恢复软件？"))
+        }
     }
 
     // MARK: - Helpers
+
+    /// Orange banner shown while the low-battery auto-restore gate is active.
+    /// Auto-restore is delayed until charge reaches ≥20%; manual restore is
+    /// unaffected (design-spec §3.2).
+    private var gateBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption)
+            Text(lm.translate("Battery low, auto-restore resumes at ≥20%", "电量不足，≥20% 后自动恢复"))
+                .font(.caption)
+            Spacer()
+            Text(lm.translate("Manual restore is not affected", "手动恢复不受影响"))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(8)
+        .background(Color.orange.opacity(0.15))
+        .foregroundColor(.orange)
+        .cornerRadius(6)
+        .padding(.horizontal)
+    }
 
     /// SF Symbol name for the given category.
     private func systemIcon(for category: AppCategory) -> String {

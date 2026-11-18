@@ -26,6 +26,18 @@ import Combine
 import ServiceManagement
 import UserNotifications
 
+// MARK: - Contact Issue Choice (v0.2.6)
+
+/// Choices presented by the power contact-issue dialog (design-spec §6.2 / AC-614).
+enum ContactIssueChoice {
+    /// Pause auto-restore (safe default); keep the pending restore list.
+    case pause
+    /// Clear the contact issue and continue the restore sequence.
+    case ignore
+    /// Cancel the restore and stay stopped; keep the pending restore list.
+    case stop
+}
+
 // MARK: - App Delegate
 
 /// The NSApplicationDelegate that owns every subsystem and orchestrates
@@ -34,7 +46,7 @@ import UserNotifications
 /// Entry point is main.swift (not @main on this class) to avoid SwiftUI's
 /// `App` protocol, which creates a persistent scene view graph that AppKit
 /// renders in display cycles even when idle (~2-6% CPU).
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableObject {
 
     // MARK: - Subsystem References
 
@@ -81,6 +93,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Combine subscriptions for power state, app list, and restore count.
     private var cancellables     = Set<AnyCancellable>()
+
+    // MARK: - Restore Gating & Contact Issue (v0.2.6)
+
+    /// Drives the power contact-issue choice dialog (AC-614). Set `true` when
+    /// >= 3 AC/battery flips are detected within a 10s window; cleared when the
+    /// user resolves the issue via `resolveContactIssue(_:)`.
+    @Published var showContactIssueDialog = false
+
+    /// Whether a power contact issue has been detected and the auto
+    /// kill/restore loop is paused until the user chooses (AC-614).
+    private var contactIssue = false
+
+    /// Timestamps of AC/battery `isOnBattery` transitions (sliding 10s window),
+    /// used to detect a loose power connection.
+    private var powerFlipTimes: [Date] = []
+
+    /// Last recorded battery state, used to detect actual flips (the initial
+    /// app-list-load call is not a real transition and must not count).
+    private var lastRecordedBatteryState = false
+
+    /// Whether `lastRecordedBatteryState` has been initialized (the first
+    /// `queuePowerAction` call reflects the current state, not a transition).
+    private var hasRecordedBatteryState = false
+
+    /// Sliding (timestamp, percentage) snapshots for AC-615~617 decline checks.
+    private var batterySnapshots: [(time: Date, pct: Double)] = []
+
+    /// Whether a rapid battery decline (AC-616) was already notified, so the
+    /// warning is not repeated on every subsequent snapshot.
+    private var rapidDeclineNotified = false
 
     // MARK: - Power-Action Queue
 
@@ -249,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .environmentObject(versionChecker)
             .environmentObject(updater)
             .environmentObject(hardwareMonitor)
+            .environmentObject(self)
 
         let hostingController = NSHostingController(rootView: contentView)
         let window = NSWindow(contentViewController: hostingController)
@@ -641,6 +684,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.queuePowerAction(isOnBattery: batteryMonitor.isOnBattery)
             }
             .store(in: &cancellables)
+
+        // Battery percentage changes drive the low-battery auto-restore gate
+        // (AC-601/602), decline warnings (AC-615~617), and manual-override
+        // suppression (AC-618).
+        batteryMonitor.$batteryPercentage
+            .sink { [weak self] pct in
+                self?.handleBatteryPercentageChange(pct)
+            }
+            .store(in: &cancellables)
     }
 
     /// Updates the menu-bar badge count. On battery, shows the number of
@@ -662,7 +714,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Rapid successive calls coalesce -- only the **latest** state is
     /// retained in `pendingPowerAction`. If no operation is in progress
     /// and no cooldown timer is active, the action executes immediately.
+    ///
+    /// v0.2.6 additions: records each AC/battery flip for contact-issue
+    /// detection (AC-614), cancels any in-flight restore on unplug (AC-613),
+    /// and pauses the auto loop while a contact issue is pending.
     private func queuePowerAction(isOnBattery: Bool) {
+        // Record an actual power flip. The initial app-list-load call reflects
+        // the current state (not a transition) and must not count toward the
+        // contact-issue threshold.
+        if hasRecordedBatteryState, lastRecordedBatteryState != isOnBattery {
+            recordPowerFlip()
+        }
+        lastRecordedBatteryState = isOnBattery
+        hasRecordedBatteryState = true
+
+        // Unplugging (battery) interrupts any in-flight restore sequence.
+        if isOnBattery {
+            processKiller.cancelRestore()
+        }
+
+        // Contact issue already pending: hold the loop until the user chooses.
+        if contactIssue {
+            powerActionContext?.debug("跳过: contactIssue 已置位，等待用户选择")
+            return
+        }
+
+        // Detect a loose power connection (>= 3 flips within a 10s window).
+        if isPowerContactIssue(flipTimes: powerFlipTimes, now: Date()) {
+            contactIssue = true
+            pendingPowerAction = nil
+            showContactIssueDialog = true
+            powerActionContext?.log("⚠ 电源接触不良：\(powerFlipTimes.count) 次翻转/10s，停止自动循环")
+            postSystemNotification(loc("Power contact unstable", "电源接触不良"))
+            return
+        }
+
         let ctx = LogContext(name: "queuePowerAction")
         powerActionContext = ctx
         ctx.log("电源状态: \(isOnBattery ? "电池" : "交流电"), inProgress=\(powerActionInProgress), hasTimer=\(powerDelayTimer != nil)")
@@ -675,6 +761,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             powerActionContext?.debug("跳过: inProgress=\(powerActionInProgress), hasTimer=\(powerDelayTimer != nil), pending=\(pendingPowerAction != nil)")
             return
         }
+        // Contact issue: block scheduling until the user resolves it (AC-614).
+        guard !contactIssue else {
+            powerActionContext?.debug("跳过: contactIssue 已置位，等待用户选择")
+            return
+        }
 
         pendingPowerAction = nil
         powerActionInProgress = true
@@ -684,6 +775,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         actionCtx.log("开始执行 \(onBattery ? "终止" : "恢复") 操作")
 
         if onBattery {
+            // Interrupt any in-flight restore before terminating (AC-612/613).
+            processKiller.cancelRestore()
             if autoKillEnabled {
                 processKiller.killSelected(appLister.apps, context: actionCtx) { [weak self] in
                     self?.appLister.refreshAppList()
@@ -694,11 +787,124 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 onPowerActionCompleted(onBattery: onBattery)
             }
         } else {
-            processKiller.restoreKilledApps(using: appLister.apps, context: actionCtx) { [weak self] in
-                self?.appLister.refreshAppList()
-                self?.onPowerActionCompleted(onBattery: onBattery)
+            // Auto restore on AC power -- gated by low battery (AC-601/602).
+            if batteryMonitor.batteryPercentage < 20 {
+                processKiller.restoreGateState = .delayedLowBattery
+                actionCtx.log("电量不足(<20%)，自动恢复延缓，待恢复列表保留")
+                postSystemNotification(loc("Battery low, restore delayed (<20%)", "电量不足，恢复延缓（<20%）"))
+                // No cooldown: the >=20% battery subscription resumes restore.
+                powerActionInProgress = false
+            } else {
+                processKiller.restoreGateState = .idle
+                processKiller.restoreSequential(using: appLister.apps, manual: false, context: actionCtx) { [weak self] in
+                    self?.appLister.refreshAppList()
+                    self?.onPowerActionCompleted(onBattery: onBattery)
+                }
             }
         }
+    }
+
+    // MARK: - Restore Gating & Contact Issue (v0.2.6)
+
+    /// Records an AC/battery flip timestamp and trims the sliding 10s window.
+    private func recordPowerFlip() {
+        let now = Date()
+        powerFlipTimes.append(now)
+        powerFlipTimes = powerFlipTimes.filter { $0 >= now.addingTimeInterval(-10) }
+    }
+
+    /// Handles a battery-percentage change: low-battery gating (AC-601/602),
+    /// decline warnings (AC-615~617), and manual-override suppression (AC-618).
+    ///
+    /// Runs on the main thread (BatteryMonitor publishes on main). The
+    /// auto-restore gate only affects the automatic path; manual restores
+    /// (`manualRestoreOverride`) ignore all auto handling here.
+    private func handleBatteryPercentageChange(_ pct: Double) {
+        let now = Date()
+        batterySnapshots.append((now, pct))
+        batterySnapshots = batterySnapshots.filter { $0.time >= now.addingTimeInterval(-10) }
+
+        // Manual restore running: ignore auto pause/gating (AC-618).
+        guard !processKiller.manualRestoreOverride else { return }
+
+        // Contact issue pending: hold all auto gate/restore decisions until the
+        // user resolves the dialog (AC-614).
+        guard !contactIssue else { return }
+
+        // AC-617: below 20% while restoring on AC -> pause auto-restore.
+        if pct < 20 {
+            if !batteryMonitor.isOnBattery && processKiller.restoreGateState != .delayedLowBattery {
+                processKiller.restoreGateState = .delayedLowBattery
+                postSystemNotification(loc("Battery low, auto-restore paused", "电量不足，自动恢复已暂停"))
+            }
+            rapidDeclineNotified = false
+            return
+        }
+
+        // AC-615/616: decline / rapid-decline over the sliding window. Only
+        // meaningful while on AC (weak charger / high consumption during the
+        // restore); on battery, natural drain is the expected state.
+        if !batteryMonitor.isOnBattery, let earliest = batterySnapshots.first, earliest.pct > pct {
+            let delta = pct - earliest.pct
+            let span = now.timeIntervalSince(earliest.time)
+            if processKiller.restoreGateState != .delayedLowBattery {
+                processKiller.restoreGateState = .delayedLowBattery
+                postSystemNotification(loc("Insufficient power", "电源不足"))
+            }
+            if span <= 10 && delta <= -5 && !rapidDeclineNotified {
+                rapidDeclineNotified = true
+                postSystemNotification(loc("Power consumption high — check connected apps", "消耗过大，建议处理"))
+            }
+        } else {
+            rapidDeclineNotified = false
+        }
+
+        // AC-602: gate cleared (>=20% on AC, not already restoring) -> resume
+        // the auto-restore sequence.
+        if !batteryMonitor.isOnBattery && pct >= 20
+            && processKiller.restoreGateState == .delayedLowBattery
+            && !processKiller.isRestoring {
+            processKiller.restoreGateState = .idle
+            postSystemNotification(loc("Battery sufficient, restore started", "电量充足，开始恢复"))
+            processKiller.restoreSequential(using: appLister.apps, manual: false)
+        }
+    }
+
+    /// Resolves the power contact-issue dialog choice (AC-614).
+    ///
+    /// - Parameter choice: `.pause` (safe default), `.ignore` (continue), or
+    ///   `.stop` (cancel restore, stay stopped).
+    func resolveContactIssue(_ choice: ContactIssueChoice) {
+        contactIssue = false
+        showContactIssueDialog = false
+        rapidDeclineNotified = false
+        switch choice {
+        case .pause:
+            processKiller.cancelRestore()
+            processKiller.restoreGateState = .delayedLowBattery
+            logger("resolveContactIssue: 暂停恢复，待恢复列表保留")
+        case .ignore:
+            logger("resolveContactIssue: 忽略接触异常，继续恢复")
+            processKiller.restoreSequential(using: appLister.apps, manual: false)
+        case .stop:
+            processKiller.cancelRestore()
+            logger("resolveContactIssue: 停止，保持停止状态")
+        }
+    }
+
+    /// Posts a system (UNUserNotificationCenter) notification with the BatKill
+    /// title. Used for gate / contact-issue status transitions (AC-609~611).
+    private func postSystemNotification(_ body: String) {
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = "BatKill"
+        content.body = body
+        content.sound = .default
+        center.add(UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        ))
     }
 
     private func onPowerActionCompleted(onBattery: Bool) {
