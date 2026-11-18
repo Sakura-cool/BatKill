@@ -233,6 +233,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         //    them from all persisted keys so erroneous config no longer takes
         //    effect. Runs before the app list is refreshed.
         SystemCoreProtection.cleanupPersistedConfig()
+        // cleanupPersistedConfig bypasses the ProcessKiller setters (badge sync).
+        processKiller.refreshPendingCount()
 
         // 3. Begin scanning installed applications.
         appLister.refreshAppList()
@@ -657,8 +659,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     // MARK: - Badge & State Observation
     // ──────────────────────────────────────────────
 
-    /// Sets up Combine subscriptions that drive badge updates and trigger
-    /// power actions when the battery state or app list changes.
+    /// Sets up Combine subscriptions driving badge updates + power actions.
     private func observeStateChanges() {
         // When battery state changes, refresh the badge and enqueue a kill/restore.
         batteryMonitor.$isOnBattery
@@ -830,7 +831,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
 
     /// Handles a battery-percentage change: low-battery gating (AC-601/602),
     /// decline warnings (AC-615~617), manual-override suppression (AC-618).
-    /// Runs on main; the gate only affects the automatic path.
     private func handleBatteryPercentageChange(_ pct: Double) {
         let now = Date()
         batterySnapshots.append((now, pct))

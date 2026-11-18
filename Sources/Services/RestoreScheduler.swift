@@ -427,6 +427,12 @@ extension ProcessKiller {
                 if let restoredName = self.restoreSingleApp(appId, using: apps) {
                     restoredIds.append(appId)
                     restoreCtx.log("恢复 \(restoredName) 成功")
+                    // Dynamic badge/pending count (真机反馈): drop the restored
+                    // app from the pending sets per-app so the menu-bar badge
+                    // decreases DURING the restore, not only at sequence end.
+                    DispatchQueue.main.async {
+                        self.removePending(appId)
+                    }
                 } else {
                     restoreCtx.log("恢复 \(appId) 失败")
                 }

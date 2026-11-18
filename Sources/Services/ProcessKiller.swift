@@ -95,6 +95,12 @@ final class ProcessKiller: ObservableObject {
         pendingRestoreCount = killedRestorePaths.count + suspendedPaths.count
     }
 
+    /// Re-syncs `pendingRestoreCount` from the persisted lists. Call after any
+    /// code writing those lists directly to UserDefaults (bypasses setters).
+    func refreshPendingCount() {
+        pendingRestoreCount = killedRestorePaths.count + suspendedPaths.count
+    }
+
     // MARK: - Persisted "Killed on Battery" List
 
     /// Paths of apps that were killed by BatKill and should be restored
@@ -367,6 +373,11 @@ final class ProcessKiller: ObservableObject {
                     restoredNames.append(restoredName)
                     restoredIds.append(appId)
                     restoreCtx.log("恢复 \(restoredName) 成功")
+                    // Dynamic badge/pending count (真机反馈): same per-app drop
+                    // as the sequential path so the badge counts down live.
+                    DispatchQueue.main.async {
+                        self.removePending(appId)
+                    }
                 } else {
                     restoreCtx.log("恢复 \(appId) 失败")
                 }
