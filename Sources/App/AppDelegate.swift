@@ -42,7 +42,6 @@ enum ContactIssueChoice {
 
 /// The NSApplicationDelegate that owns every subsystem and orchestrates
 /// power-state transitions, window management, and badge updates.
-///
 /// Entry point is main.swift (not @main on this class) to avoid SwiftUI's
 /// `App` protocol, which creates a persistent scene view graph that AppKit
 /// renders in display cycles even when idle (~2-6% CPU).
@@ -132,9 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     /// Low-frequency battery re-evaluation timer (B1). `BatteryMonitor` publishes
     /// `batteryPercentage` only on IOKit power-source events; during steady
     /// charging below 20% there are no events, so AC-602 (resume at >=20%)
-    /// would never fire. While the low-battery gate is held, poll every 30s to
-    /// detect the threshold and resume auto-restore. Runs ONLY in the rare
-    /// gated state (AC + <20%), so idle power stays unaffected.
+    /// would never fire. While the low-battery gate is held, poll every 30s;
+    /// runs ONLY in the rare gated state (AC + <20%), so idle power is unaffected.
     private var lowBatteryGateTimer: Timer?
 
     // MARK: - Power-Action Queue
@@ -161,8 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     private var powerDelayTimer: Timer?
 
     /// Seconds to wait after completing a power action before allowing
-    /// the next queued action to proceed. Prevents rapid thrashing when
-    /// the power source flickers.
+    /// the next queued action to proceed. Prevents rapid thrashing on flicker.
     private let powerActionDelaySeconds: TimeInterval = 30
 
     /// Current power action context for structured logging.
@@ -179,9 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     // MARK: - Single Instance
     // ──────────────────────────────────────────────
 
-    /// Checks if another instance of BatKill is already running.
-    /// If so, activates the existing instance and terminates this one.
-    /// Returns true when the current instance should stop launching.
+    /// Checks if another instance of BatKill is already running; if so,
+    /// activates it and terminates this one. Returns true to stop launching.
     private func enforceSingleInstance() -> Bool {
         let current = NSRunningApplication.current
         let bundleID = current.bundleIdentifier ?? ""
@@ -206,8 +202,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
 
     /// Called once after the app finishes launching. Handles CLI fan-write
     /// arguments (admin re-launch), enforces single instance, sets up the
-    /// menu bar, refreshes the app list, checks for updates, and begins
-    /// observing state changes for badge updates and power actions.
+    /// menu bar, refreshes the app list, checks updates, begins observing
+    /// state changes for badge updates and power actions.
     func applicationDidFinishLaunching(_ notification: Notification) {
         // If this is an admin re-launch for fan writing, handle the CLI
         // arguments and exit immediately -- no UI setup needed.
@@ -323,8 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     /// Adds a title-bar accessory next to the window-traffic-light buttons
     /// showing a tappable "BatKill" name button plus a version label
     /// ("v0.1.6") and a "?" help button. Clicking the name opens the GitHub
-    /// repository; clicking the version runs a manual update check; clicking
-    /// "?" shows the built-in usage guide.
+    /// repo; clicking the version runs a manual update check; "?" shows the guide.
     private func installTitleBarVersionAccessory(on window: NSWindow) {
         // Hide the system-rendered title text; the accessory below renders
         // "BatKill vX.X.X" next to the traffic-light buttons instead.
@@ -450,9 +445,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     }
 
     /// Manual update check triggered by tapping the title-bar version label.
-    /// The check result, download, and install run as one locked flow:
-    /// further clicks are ignored until the alert is dismissed or the
-    /// download/install finishes (the app relaunches on success).
+    /// Check, download, and install run as one locked flow; further clicks are
+    /// ignored until the alert is dismissed or the flow finishes.
     @objc private func titleBarVersionClicked() {
         guard !isManualUpdateInFlight else {
             logger("Manual update check skipped: flow already in progress")
@@ -727,10 +721,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     /// Rapid successive calls coalesce -- only the **latest** state is
     /// retained in `pendingPowerAction`. If no operation is in progress
     /// and no cooldown timer is active, the action executes immediately.
-    ///
-    /// v0.2.6 additions: records each AC/battery flip for contact-issue
-    /// detection (AC-614), cancels any in-flight restore on unplug (AC-613),
-    /// and pauses the auto loop while a contact issue is pending.
+    /// v0.2.6: records each AC/battery flip (AC-614), cancels in-flight
+    /// restore on unplug (AC-613), and pauses the loop while a contact
+    /// issue is pending.
     private func queuePowerAction(isOnBattery: Bool) {
         // Record an actual power flip. The initial app-list-load call reflects
         // the current state (not a transition) and must not count toward the
@@ -756,9 +749,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         if isPowerContactIssue(flipTimes: powerFlipTimes, now: Date()) {
             contactIssue = true
             pendingPowerAction = nil
-            showContactIssueDialog = true
             powerActionContext?.log("⚠ 电源接触不良：\(powerFlipTimes.count) 次翻转/10s，停止自动循环")
             postSystemNotification(loc("Power contact unstable", "电源接触不良"))
+            // Settings window visible -> SwiftUI `.alert`; closed (menu-bar-only
+            // use) -> modal NSAlert fallback (design-spec §6.2), routed to main.
+            if settingsWindow?.isVisible == true {
+                showContactIssueDialog = true
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.presentContactIssueNSAlert()
+                }
+            }
             return
         }
 
