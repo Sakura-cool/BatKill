@@ -164,8 +164,8 @@ struct PopoverView: View {
 
     // MARK: - Badge View
 
-    /// Capsule-shaped badge in the top-right corner showing either the
-    /// kill count (on battery) or the pending restore count (on AC).
+    /// Capsule-shaped badge in the top-right corner showing the pending
+    /// restore count (matches the menu-bar icon badge and the pending list).
     /// Always occupies its slot (hidden via opacity at 0) so the popover
     /// layout never jumps when the count changes.
     private var badgeView: some View {
@@ -174,7 +174,7 @@ struct PopoverView: View {
             .foregroundColor(.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
-            .background(batteryMonitor.isOnBattery ? Color.red : Color.green)
+            .background(Color.green)
             .clipShape(Capsule())
             .opacity(badgeCount > 0 ? 1 : 0)
     }
@@ -221,14 +221,11 @@ struct PopoverView: View {
 
     // MARK: - Computed Values
 
-    /// Number of selected-and-running apps (on battery) or pending
-    /// restore apps (on AC).
+    /// Pending restore count — the badge always reflects "how many apps are
+    /// still pending restore", independent of power state (matches the
+    /// menu-bar icon badge and the pending list).
     private var badgeCount: Int {
-        if batteryMonitor.isOnBattery {
-            return appLister.apps.filter { $0.isSelected && $0.isRunning }.count
-        } else {
-            return processKiller.pendingRestoreCount
-        }
+        processKiller.pendingRestoreCount
     }
 
     /// Localized power source text with battery percentage.

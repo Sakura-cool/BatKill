@@ -702,14 +702,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
             .store(in: &cancellables)
     }
 
-    /// Updates the menu-bar badge count. On battery, shows the number of
-    /// selected-and-running apps. On AC power, shows the pending restore count.
+    /// Updates the menu-bar badge count. Always shows the pending restore
+    /// count ("还有几个待恢复"), independent of power state — previously it
+    /// showed selected-and-running on battery, which disagreed with the
+    /// pending list (bug: badge 2 but 0 pending on battery).
     private func refreshBadge() {
         guard appLister.hasLoaded else { return }
-        let count = batteryMonitor.isOnBattery
-            ? appLister.apps.filter { $0.isSelected && $0.isRunning }.count
-            : processKiller.pendingRestoreCount
-        menuBarManager?.updateBadge(count: count)
+        menuBarManager?.updateBadge(count: processKiller.pendingRestoreCount)
     }
 
     // ──────────────────────────────────────────────
