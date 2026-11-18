@@ -4,8 +4,10 @@
 # Compiles the SwiftUI macOS app and bundles it as .app
 #
 # Usage:
-#   bash build.sh                  # Build for both arm64 + x86_64
+#   bash build.sh                  # Build for the HOST architecture only (dev/debug)
+#   bash build.sh --all            # Build for both arm64 + x86_64 (release)
 #   bash build.sh --arch x86_64    # Build for specific arch only
+#   bash build.sh --dmg            # Release: both arches + package as .dmg
 # ────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -16,20 +18,21 @@ SDK_PATH="$(xcrun --show-sdk-path --sdk macosx)"
 
 # ── Parse arguments ──
 BUILD_DMG=false
+BUILD_ALL=false
 TARGET_ARCH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dmg) BUILD_DMG=true ;;
     --arch) TARGET_ARCH="$2"; shift ;;
-    --all) ;;
+    --all) BUILD_ALL=true ;;
     --help|-h)
       echo "Usage: bash build.sh [OPTIONS]"
       echo ""
       echo "Options:"
       echo "  --arch ARCH   Build for specific architecture (arm64|x86_64)"
       echo "  --dmg         Build and package as .dmg (zip no longer produced since 2026-10-23)"
-      echo "  --all         Build for both architectures (default)"
+      echo "  --all         Build for both architectures (release; default is host arch only)"
       echo "  --help, -h    Show this help message"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -51,11 +54,15 @@ else
 fi
 
 # ── Determine architectures to build ──
+# Default is the HOST architecture only: fast for local debugging. Both arches
+# are built only for release (--all / --dmg), which is what distribution needs.
 NATIVE_ARCH="$(uname -m)"
 if [ -n "$TARGET_ARCH" ]; then
   ARCHES=("$TARGET_ARCH")
-else
+elif [ "$BUILD_ALL" = true ] || [ "$BUILD_DMG" = true ]; then
   ARCHES=("arm64" "x86_64")
+else
+  ARCHES=("$NATIVE_ARCH")
 fi
 
 # ── Build function ──
@@ -232,12 +239,12 @@ done
 echo "═══════════════════════════════════════════"
 echo ""
 echo "  Run:"
-echo "    open \".build/${NATIVE_ARCH}/${APP_NAME}-${NATIVE_ARCH}.app\""
+echo "    open \".build/${ARCHES[0]}/${APP_NAME}-${ARCHES[0]}.app\""
 echo ""
 echo "  Copy to Applications:"
-echo "    cp -R \".build/${NATIVE_ARCH}/${APP_NAME}-${NATIVE_ARCH}.app\" /Applications/"
+echo "    cp -R \".build/${ARCHES[0]}/${APP_NAME}-${ARCHES[0]}.app\" /Applications/"
 if [ "$BUILD_DMG" = true ]; then
   echo ""
   echo "  Release DMG:"
-  echo "    .package/${NATIVE_ARCH}/${APP_NAME}-${NATIVE_ARCH}.dmg"
+  echo "    .package/${ARCHES[0]}/${APP_NAME}-${ARCHES[0]}.dmg"
 fi

@@ -74,7 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     private var hasAppeared      = false
 
     /// Reference to the settings window so we can avoid creating duplicates.
-    private var settingsWindow: NSWindow?
+    /// Not `private`: `presentContactIssue` needs it to pick the prompt route
+    /// (SwiftUI `.alert` vs the NSAlert fallback).
+    var settingsWindow: NSWindow?
 
     /// Reference to the temperature/hardware-monitor window.
     private var temperatureWindow: NSWindow?
@@ -100,6 +102,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     /// user resolves the issue via `resolveContactIssue(_:)`.
     @Published var showContactIssueDialog = false
 
+    /// Final power state when the contact-issue prompt last fired (AC-614): on
+    /// battery the prompt must not offer "continue restore" (auto-restore only
+    /// runs on AC — the user relaunches apps manually).
+    @Published var contactIssueOnBattery = false
+
+    /// Contact-issue detection is suppressed until this date: one dialog per
+    /// episode (真机反馈: 弹窗不要多个).
+    private var contactIssueCooldownUntil = Date.distantPast
+
     /// Whether a power contact issue has been detected and the auto
     /// kill/restore loop is paused until the user chooses (AC-614).
     private var contactIssue = false
@@ -123,16 +134,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     /// warning is not repeated on every subsequent snapshot.
     private var rapidDeclineNotified = false
 
-    /// Whether the charger-power-insufficient warning (AC-619) was already
-    /// notified for the current weak-charger episode, re-armed when the
-    /// condition clears (battery >=80%, on battery, or no longer declining).
+    /// Whether the AC-619 charger-power warning fired this episode; re-arms
+    /// when the condition clears (>=80%, on battery, or no longer declining).
     private var chargerPowerNotified = false
 
     /// Low-frequency battery re-evaluation timer (B1). `BatteryMonitor` publishes
-    /// `batteryPercentage` only on IOKit power-source events; during steady
-    /// charging below 20% there are no events, so AC-602 (resume at >=20%)
-    /// would never fire. While the low-battery gate is held, poll every 30s;
-    /// runs ONLY in the rare gated state (AC + <20%), so idle power is unaffected.
+    /// `batteryPercentage` only on IOKit events; during steady charging below 20%
+    /// there are none, so AC-602 (resume at >=20%) would never fire. Polls
+    /// every 30s ONLY while the gate is held (AC + <20%); idle power unaffected.
     private var lowBatteryGateTimer: Timer?
 
     // MARK: - Power-Action Queue
@@ -718,16 +727,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
 
     /// Enqueue a power-state transition.
     ///
-    /// Rapid successive calls coalesce -- only the **latest** state is
-    /// retained in `pendingPowerAction`. If no operation is in progress
-    /// and no cooldown timer is active, the action executes immediately.
-    /// v0.2.6: records each AC/battery flip (AC-614), cancels in-flight
-    /// restore on unplug (AC-613), and pauses the loop while a contact
-    /// issue is pending.
+    /// Rapid calls coalesce -- only the **latest** state is retained in
+    /// `pendingPowerAction`; if nothing is in progress and no cooldown timer is
+    /// active, it executes immediately. v0.2.6: records each AC/battery flip
+    /// (AC-614), cancels in-flight restore on unplug (AC-613), holds the loop
+    /// while a contact issue is pending.
     private func queuePowerAction(isOnBattery: Bool) {
         // Record an actual power flip. The initial app-list-load call reflects
-        // the current state (not a transition) and must not count toward the
-        // contact-issue threshold.
+        // the current state (not a transition) and must not count as a flip.
         if hasRecordedBatteryState, lastRecordedBatteryState != isOnBattery {
             recordPowerFlip()
         }
@@ -745,21 +752,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
             return
         }
 
-        // Detect a loose power connection (>= 3 flips within a 10s window).
-        if isPowerContactIssue(flipTimes: powerFlipTimes, now: Date()) {
+        // Detect a loose power connection (>= 3 flips in a 10s window); suppressed
+        // for the cooldown after a fire, so one dialog per episode.
+        if isPowerContactIssue(flipTimes: powerFlipTimes, now: Date()),
+           Date() >= contactIssueCooldownUntil {
             contactIssue = true
             pendingPowerAction = nil
-            powerActionContext?.log("⚠ 电源接触不良：\(powerFlipTimes.count) 次翻转/10s，停止自动循环")
+            powerActionContext?.log("⚠ 电源接触不良：\(powerFlipTimes.count) 次翻转/10s，最终态 \(isOnBattery ? "电池" : "交流电")，停止自动循环")
             postSystemNotification(loc("Power contact unstable", "电源接触不良"))
-            // Settings window visible -> SwiftUI `.alert`; closed (menu-bar-only
-            // use) -> modal NSAlert fallback (design-spec §6.2), routed to main.
-            if settingsWindow?.isVisible == true {
-                showContactIssueDialog = true
-            } else {
-                DispatchQueue.main.async { [weak self] in
-                    self?.presentContactIssueNSAlert()
-                }
-            }
+            presentContactIssue(onBattery: isOnBattery)
             return
         }
 
@@ -931,17 +932,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         }
     }
 
-    /// Resolves the power contact-issue dialog choice (AC-614).
-    ///
-    /// - Parameter choice: `.pause` (safe default), `.ignore` (continue), or
-    ///   `.stop` (cancel restore, stay stopped).
+    /// Resolves the power contact-issue prompt (AC-614): `.pause` (safe default),
+    /// `.ignore` (continue), or `.stop` (cancel restore, stay stopped).
     func resolveContactIssue(_ choice: ContactIssueChoice) {
         contactIssue = false
         showContactIssueDialog = false
         rapidDeclineNotified = false
-        // Clear the flip window so the dialog fires ONCE per episode, not
-        // repeatedly: old flips stay in the 10s window and would re-trigger
-        // immediately (esp. ".ignore", which re-runs queuePowerAction).
+        // One dialog per episode (真机反馈: 弹窗不要多个).
+        contactIssueCooldownUntil = Date().addingTimeInterval(ContactIssuePrompt.cooldown)
+        // Clear old flips so ".ignore" (which re-runs queuePowerAction) cannot
+        // re-trigger the prompt immediately.
         powerFlipTimes = []
         switch choice {
         case .pause:
@@ -950,12 +950,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
             processKiller.restoreGateReason = .contactIssue
             logger("resolveContactIssue: 暂停恢复，待恢复列表保留")
         case .ignore:
-            logger("resolveContactIssue: 忽略接触异常，继续恢复")
-            // Route through the power queue (mutex/cooldown) and guard against
-            // re-entry: the alert's dismiss binding and the button action may
-            // both resolve, so never start a second sequence (S4/S6).
+            logger("resolveContactIssue: 忽略接触异常，继续")
+            // Route through the power queue (mutex/cooldown); guard against re-entry
+            // (S4/S6). Resumes the ACTUAL final power state: on battery this
+            // must NOT restore, nor record a phantom flip that re-triggers it.
             if !processKiller.isRestoring {
-                queuePowerAction(isOnBattery: false)
+                queuePowerAction(isOnBattery: contactIssueOnBattery)
             }
         case .stop:
             processKiller.cancelRestore()

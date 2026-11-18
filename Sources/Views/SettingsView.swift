@@ -144,24 +144,37 @@ struct SettingsView: View {
                 }
             )
         ) {
-            // Pause restore -- safe default (Enter).
-            Button(lm.translate("Pause restore", "暂停恢复")) {
-                appDelegate.resolveContactIssue(.pause)
-            }
-            .keyboardShortcut(.defaultAction)
-            // Ignore the unstable contact and continue the restore sequence.
-            Button(lm.translate("Ignore & continue restore", "继续忽略异常，继续恢复")) {
-                appDelegate.resolveContactIssue(.ignore)
-            }
-            // Stop -- cancel restore, keep apps stopped, keep pending list.
-            Button(lm.translate("Stop", "停止"), role: .destructive) {
-                appDelegate.resolveContactIssue(.stop)
+            // Choices follow the FINAL power state (真机反馈): on battery there is
+            // no restore to pause or continue, so only ignore/stop are offered.
+            if appDelegate.contactIssueOnBattery {
+                Button(ContactIssuePrompt.title(.ignore, onBattery: true)) {
+                    appDelegate.resolveContactIssue(.ignore)
+                }
+                .keyboardShortcut(.defaultAction)
+                Button(ContactIssuePrompt.title(.stop, onBattery: true), role: .destructive) {
+                    appDelegate.resolveContactIssue(.stop)
+                }
+            } else {
+                // Pause restore -- safe default (Enter).
+                Button(lm.translate("Pause restore", "暂停恢复")) {
+                    appDelegate.resolveContactIssue(.pause)
+                }
+                .keyboardShortcut(.defaultAction)
+                // Ignore the unstable contact and continue the restore sequence.
+                Button(lm.translate("Ignore & continue restore", "继续忽略异常，继续恢复")) {
+                    appDelegate.resolveContactIssue(.ignore)
+                }
+                // Stop -- cancel restore, keep apps stopped, keep pending list.
+                Button(lm.translate("Stop", "停止"), role: .destructive) {
+                    appDelegate.resolveContactIssue(.stop)
+                }
             }
         } message: {
-            Text(lm.translate(
-                "Repeated power switching detected — possible loose contact",
-                "检测到电源反复切换，可能接触不良"
-            ))
+            Text(appDelegate.contactIssueOnBattery
+                ? ContactIssuePrompt.informative(onBattery: true)
+                : lm.translate(
+                    "Repeated power switching detected — possible loose contact",
+                    "检测到电源反复切换，可能接触不良"))
         }
     }
 

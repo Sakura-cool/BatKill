@@ -37,6 +37,7 @@ final class RestoreSchedulerTests: TestCase {
     func run() {
         testRestoreIntervalBoundaries()
         testPowerContactIssue()
+        testContactIssuePromptContent()
         testRestoreCancellation()
         testGateDecision()
         testBatteryDeltaAnalysis()
@@ -116,6 +117,55 @@ final class RestoreSchedulerTests: TestCase {
             let flips = [now, now.addingTimeInterval(-1), now.addingTimeInterval(-3), now.addingTimeInterval(-8)]
             XCTAssertTrue(isPowerContactIssue(flipTimes: flips, now: now, threshold: 2))
             XCTAssertFalse(isPowerContactIssue(flipTimes: flips, now: now, threshold: 5))
+        }
+    }
+
+    // MARK: - ContactIssuePrompt (AC-614 真机反馈：按最终电源态分支)
+
+    func testContactIssuePromptContent() {
+        runTest("弹窗内容：交流电态保留三项（暂停恢复/继续恢复/停止）") {
+            let choices = ContactIssuePrompt.choices(onBattery: false)
+            XCTAssertEqual(choices, [.pause, .ignore, .stop],
+                "接电态应保留恢复相关选项（自动恢复仅在接电时发生）")
+        }
+
+        runTest("弹窗内容：电池态去掉恢复选项，仅「忽略/停止」") {
+            let choices = ContactIssuePrompt.choices(onBattery: true)
+            XCTAssertEqual(choices, [.ignore, .stop],
+                "电池供电下自动恢复无意义，不应询问继续恢复（用户手动处理）")
+            XCTAssertFalse(choices.contains(.pause),
+                "电池态恢复早已中断，不应再提供「暂停恢复」")
+            XCTAssertFalse(choices.contains(.ignore) == false,
+                "电池态仍应允许忽略异常继续监控")
+        }
+
+        runTest("弹窗内容：「忽略」按钮在电池态与接电态文案不同") {
+            let onAC = ContactIssuePrompt.title(.ignore, onBattery: false)
+            let onBattery = ContactIssuePrompt.title(.ignore, onBattery: true)
+            XCTAssertNotEqual(onAC, onBattery, "接电态提到「继续恢复」，电池态不应提恢复")
+            XCTAssertTrue(onAC.contains("恢复"), "接电态应提及恢复: \(onAC)")
+            XCTAssertFalse(onBattery.contains("恢复"), "电池态不应提及恢复: \(onBattery)")
+        }
+
+        runTest("弹窗内容：「暂停恢复」文案仅用于接电态选项") {
+            XCTAssertEqual(
+                ContactIssuePrompt.choices(onBattery: false).contains(.pause), true)
+            XCTAssertEqual(
+                ContactIssuePrompt.choices(onBattery: true).contains(.pause), false)
+        }
+
+        runTest("弹窗内容：单弹窗冷却为正且足够长，避免连续重复弹窗") {
+            XCTAssertGreaterThan(ContactIssuePrompt.cooldown, 0,
+                "冷却必须为正，否则检测会在冷却期内立即再次触发")
+            XCTAssertGreaterThanOrEqual(ContactIssuePrompt.cooldown, 30,
+                "冷却过短会在一次接触不良事件中重复弹窗")
+        }
+
+        runTest("弹窗内容：两种电源态都能给出非空正文") {
+            XCTAssertFalse(ContactIssuePrompt.informative(onBattery: true).isEmpty)
+            XCTAssertFalse(ContactIssuePrompt.informative(onBattery: false).isEmpty)
+            XCTAssertTrue(ContactIssuePrompt.informative(onBattery: true).contains("电池供电"),
+                "电池态正文应说明当前为电池供电")
         }
     }
 
