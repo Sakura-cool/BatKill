@@ -174,11 +174,12 @@ struct PendingRestoreSheet: View {
                 }
             }
 
-            // Restore progress row (shared with SettingsView, §4.2)
+            // Restore progress row (shared with SettingsView, §4.2). Vertical
+            // padding keeps it clear of the list above and the divider below.
             if processKiller.isRestoring {
                 RestoreProgressRow(processKiller: processKiller, lm: lm)
                     .padding(.horizontal)
-                    .padding(.top, 6)
+                    .padding(.vertical, 8)
             }
 
             Divider()
@@ -253,6 +254,7 @@ struct PendingRestoreSheet: View {
         .foregroundColor(.orange)
         .cornerRadius(6)
         .padding(.horizontal)
+        .padding(.bottom, 10)
     }
 
     /// SF Symbol name for the given category.

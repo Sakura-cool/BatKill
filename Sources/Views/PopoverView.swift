@@ -3,24 +3,28 @@
 //
 //  The compact popover panel shown when the user left-clicks the menu-bar
 //  icon. Displays the current power status, a badge count, and a quick
-//  "Kill Now" button.
+//  action -- "Kill Now" on battery, or a subdivided restore entry
+//  ("Restore Sequentially" + "Bulk Quick Restore") when apps are pending.
 //
 //  This is NOT the full settings window -- it is a lightweight status
 //  dashboard. The full settings panel is hosted by SettingsView in a
 //  separate NSWindow.
 //
 //  Architecture:
-//    - Hosted inside an NSPopover by MenuBarManager
+//    - Hosted inside an NSPanel (popover) by MenuBarManager
 //    - Receives BatteryMonitor, AppLister, ProcessKiller, and
 //      LocalizationManager as ObservedObjects (not EnvironmentObjects)
 //    - Full settings panel is opened via right-click → "Show Window"
 
+import AppKit
 import SwiftUI
 
 // MARK: - Popover Content (shown from menu bar)
 
 /// Compact status popover displayed on left-click of the menu-bar icon.
-/// Shows power state, badge count, and a quick "Kill Now" button.
+/// Shows power state, badge count, and a quick action -- "Kill Now" on
+/// battery, or a subdivided restore entry ("Restore Sequentially" +
+/// "Bulk Quick Restore") when apps are pending.
 struct PopoverView: View {
 
     // MARK: - Observed Objects
@@ -76,34 +80,77 @@ struct PopoverView: View {
             }
 
             // ── Quick Action ──
-            // Toggles between "Kill Now" (stop selected running apps) and
-            // "Restore Now" (relaunch pending apps). The button stays in
-            // place and only swaps its label/action, so the popover layout
-            // never jumps. Disabled while a kill/restore is in flight to
-            // prevent rapid double-clicks.
-            Button {
-                if shouldRestore {
-                    processKiller.restoreKilledApps(using: appLister.apps) { appLister.refreshAppList() }
-                } else {
+            // On battery: a single "Kill Now" button. On AC with pending apps:
+            // two restore actions -- "Restore Sequentially" (primary, filled
+            // green) and "Bulk Quick Restore" (secondary, outlined green) --
+            // subdividing the former single "Restore Now" button so the
+            // status-bar popover matches the settings window's dual restore
+            // entry (design-spec §1.2). Disabled while a kill/restore is in
+            // flight to prevent rapid double-clicks.
+            if shouldRestore {
+                VStack(spacing: 6) {
+                    // Sequential restore -- safe default (primary, filled green).
+                    Button {
+                        processKiller.restoreSequential(using: appLister.apps) { appLister.refreshAppList() }
+                    } label: {
+                        Label(lm.translate("Restore Sequentially", "依次恢复"),
+                              systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                            .background(Color.green.opacity(quickActionDisabled ? 0.45 : 1.0))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(quickActionDisabled)
+                    .help(lm.translate(
+                        "Restore pending apps one at a time",
+                        "依次恢复待恢复软件（逐个有序）"
+                    ))
+
+                    // Bulk quick restore -- secondary, outlined green; requires
+                    // confirmation because launching many apps may stutter.
+                    Button { confirmBulkRestore() } label: {
+                        Label(lm.translate("Bulk Quick Restore", "批量快速恢复"),
+                              systemImage: "arrow.clockwise")
+                            .font(.caption)
+                            .foregroundColor(Color.green.opacity(quickActionDisabled ? 0.45 : 1.0))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 5)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.green.opacity(quickActionDisabled ? 0.45 : 1.0), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(quickActionDisabled)
+                    .help(lm.translate(
+                        "Restore all pending apps at once (may stutter)",
+                        "一次性恢复全部待恢复软件（可能造成卡顿）"
+                    ))
+                }
+            } else {
+                // Kill Now -- terminates selected running apps (red, filled).
+                Button {
                     processKiller.killSelected(appLister.apps) { appLister.refreshAppList() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "bolt.fill")
+                            .frame(width: 14, alignment: .center)
+                        Text(lm.translate("Kill Now", "立即停止"))
+                    }
+                    .font(.caption)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 5)
+                    .background(Color.red.opacity(quickActionDisabled ? 0.45 : 1.0))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: shouldRestore ? "arrow.clockwise" : "bolt.fill")
-                        .frame(width: 14, alignment: .center)
-                    Text(shouldRestore
-                        ? lm.translate("Restore Now", "立即恢复")
-                        : lm.translate("Kill Now", "立即停止"))
-                }
-                .font(.caption)
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 5)
-                .background(quickActionColor.opacity(quickActionDisabled ? 0.45 : 1.0))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .buttonStyle(.plain)
+                .disabled(quickActionDisabled)
             }
-            .buttonStyle(.plain)
-            .disabled(quickActionDisabled)
 
             // ── Status Info ──
             // Total app count and running count summary
@@ -149,10 +196,27 @@ struct PopoverView: View {
         return !appLister.apps.contains(where: { $0.isSelected && $0.isRunning })
     }
 
-    /// Fill color for the quick-action button: red for "Kill Now", green
-    /// for "Restore Now".
-    private var quickActionColor: Color {
-        shouldRestore ? .green : .red
+    /// Presents the bulk-restore confirmation and, on confirm, restores all
+    /// pending apps at once (AC-605 "may stutter" warning). Uses NSAlert
+    /// rather than SwiftUI `.alert` because the popover is hosted in a
+    /// non-activating NSPanel, where a SwiftUI alert may not reliably
+    /// present; NSAlert is the design's established fallback for non-window
+    /// contexts (design-spec §6.2).
+    private func confirmBulkRestore() {
+        let alert = NSAlert()
+        alert.messageText = lm.translate(
+            "Bulk restore may cause temporary stutter",
+            "批量恢复可能造成短暂卡顿"
+        )
+        alert.informativeText = lm.translate(
+            "Restore all pending apps now?",
+            "确定立即恢复全部待恢复软件？"
+        )
+        alert.addButton(withTitle: lm.translate("Restore", "恢复"))
+        alert.addButton(withTitle: lm.translate("Cancel", "取消"))
+        if alert.runModal() == .alertFirstButtonReturn {
+            processKiller.restoreKilledApps(using: appLister.apps) { appLister.refreshAppList() }
+        }
     }
 
     // MARK: - Computed Values

@@ -405,9 +405,11 @@ struct SettingsView: View {
     /// toggle-all, kill/restore buttons, language picker, auto-start toggle,
     /// and update notification.
     private var bottomBar: some View {
-        VStack(spacing: 6) {
-            // Top row: actions
-            HStack(spacing: 8) {
+        VStack(spacing: 8) {
+            // ── List-management row: refresh, counts, toggle-all. ──
+            // Kept on its own light row so the primary kill/restore actions
+            // below are not crowded out by list-level controls (design-spec §1.2).
+            HStack(spacing: 6) {
                 // Refresh app list
                 Button { appLister.refreshAppList() } label: {
                     HStack(spacing: 4) {
@@ -462,7 +464,10 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
+            }
 
+            // ── Primary action row: kill + restore (sequential / bulk). ──
+            HStack(spacing: 6) {
                 // Kill Selected -- terminates all selected running apps
                 Button { processKiller.killSelected(appLister.apps) { appLister.refreshAppList() } } label: {
                     Label(lm.translate("Kill Selected", "停止选中"), systemImage: "bolt.fill")
@@ -507,32 +512,21 @@ struct SettingsView: View {
                     "一次性恢复全部待恢复软件（可能造成卡顿）"
                 ))
 
-                // Low-battery gate hint (secondary position). Auto-restore is
-                // delayed below 20% while on AC; manual buttons stay enabled.
-                if isRestoreGateDelayed
-                    && processKiller.pendingRestoreCount > 0
-                    && !processKiller.isRestoring {
-                    Label(
-                        restoreGateHintText,
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                    .font(.caption2)
-                    .foregroundColor(.orange)
-                }
+                Spacer()
 
+                // Kill in-flight indicator. Restore in-flight is surfaced by the
+                // full-width progress row below (design-spec §6.1 mutual exclusion).
                 if processKiller.isKilling {
-                    ProgressView().controlSize(.small).frame(width: 12)
-                }
-
-                if processKiller.isRestoring {
-                    ProgressView().controlSize(.small).frame(width: 12)
+                    ProgressView().controlSize(.small).frame(width: 14)
                 }
             }
 
-            // Restore progress row (only visible while a restore sequence runs).
-            // Inserted between the action row and the bottom row per design-spec §2.2.
+            // ── Status row: restore progress (during a restore) or the compact
+            // low-battery gate hint (auto-restore delayed, not restoring). ──
             if processKiller.isRestoring {
                 RestoreProgressRow(processKiller: processKiller, lm: lm)
+            } else if isRestoreGateDelayed && processKiller.pendingRestoreCount > 0 {
+                gateHintRow
             }
 
             // Bottom row: language + auto-start + update
@@ -604,6 +598,22 @@ struct SettingsView: View {
         case .contactIssue:
             return lm.translate("Power contact unstable, auto-restore paused", "电源接触不良，自动恢复已暂停")
         }
+    }
+
+    /// Compact low-battery gate hint shown beneath the action rows while
+    /// auto-restore is delayed (design-spec §3.2 secondary position). Given
+    /// its own full-width row so it never crowds the kill/restore buttons;
+    /// the manual restore buttons remain enabled regardless (AC-601/AC-608),
+    /// so the hint only reports the auto-restore hold-up (via `.help`).
+    private var gateHintRow: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.triangle.fill")
+            Text(restoreGateHintText)
+            Spacer()
+        }
+        .font(.caption2)
+        .foregroundColor(.orange)
+        .help(lm.translate("Manual restore is not affected", "手动恢复不受影响"))
     }
 
     /// Toggles selection for all non-system apps. If all are currently
