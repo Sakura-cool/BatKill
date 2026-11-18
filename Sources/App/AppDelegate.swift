@@ -937,6 +937,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         contactIssue = false
         showContactIssueDialog = false
         rapidDeclineNotified = false
+        // Clear the flip window so the dialog fires ONCE per episode, not
+        // repeatedly: old flips stay in the 10s window and would re-trigger
+        // immediately (esp. ".ignore", which re-runs queuePowerAction).
+        powerFlipTimes = []
         switch choice {
         case .pause:
             processKiller.cancelRestore()
