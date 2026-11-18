@@ -69,5 +69,42 @@ final class LoggerTests: TestCase {
                 "4-level chain should preserve a→b→c as parent of d")
             XCTAssertEqual(d.name, "d")
         }
+
+        // MARK: - Log rotation / retention / levels (v0.2.6)
+
+        runTest("日志轮转：达到阈值应轮转，未达不轮转") {
+            XCTAssertTrue(LogRotation.shouldRotate(currentSize: LogRotation.maxLogSize),
+                "恰好达到阈值应轮转")
+            XCTAssertTrue(LogRotation.shouldRotate(currentSize: LogRotation.maxLogSize + 1))
+            XCTAssertFalse(LogRotation.shouldRotate(currentSize: LogRotation.maxLogSize - 1),
+                "未达阈值不应轮转")
+            XCTAssertFalse(LogRotation.shouldRotate(currentSize: 0))
+        }
+
+        runTest("日志压缩：gzip 非空输入产生合法 gzip（魔数 1F 8B）且更小") {
+            let payload = Data(repeating: 0x41, count: 8192) // "AAAA..." 高可压缩
+            guard let gz = LogRotation.gzipCompress(payload) else {
+                XCTAssertTrue(false, "gzipCompress 应成功")
+                return
+            }
+            XCTAssertGreaterThan(gz.count, 2, "gzip 输出应非空")
+            XCTAssertEqual(gz[0], 0x1F, "gzip 魔数第 1 字节应为 0x1F")
+            XCTAssertEqual(gz[1], 0x8B, "gzip 魔数第 2 字节应为 0x8B")
+            XCTAssertLessThan(gz.count, payload.count, "高可压缩数据应显著变小")
+        }
+
+        runTest("日志压缩：空输入返回 nil（不崩溃）") {
+            XCTAssertNil(LogRotation.gzipCompress(Data()), "空输入应返回 nil")
+        }
+
+        runTest("日志级别：严重级单调递增 + 文案") {
+            XCTAssertLessThan(LogLevel.debug, LogLevel.info)
+            XCTAssertLessThan(LogLevel.info, LogLevel.warning)
+            XCTAssertLessThan(LogLevel.warning, LogLevel.error)
+            XCTAssertEqual(LogLevel.debug.description, "DEBUG")
+            XCTAssertEqual(LogLevel.info.description, "INFO")
+            XCTAssertEqual(LogLevel.warning.description, "WARN")
+            XCTAssertEqual(LogLevel.error.description, "ERROR")
+        }
     }
 }

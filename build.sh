@@ -85,11 +85,20 @@ build_arch() {
     OPT_FLAGS="$OPT_FLAGS -Xllvm -x86-use-vzeroupper"
   fi
 
+  # Debug logging (`-DDEBUG` → `#if DEBUG`) is compiled in ONLY for dev builds
+  # (default, no --dmg); release packaging (--dmg) omits it so debug logs are
+  # never emitted in production (v0.2.6 日志分级).
+  DEBUG_FLAG=""
+  if [ "$BUILD_DMG" = "false" ]; then
+    DEBUG_FLAG="-DDEBUG"
+  fi
+
   swiftc \
     -sdk "$SDK_PATH" \
     -target "$target" \
     -parse-as-library \
     $OPT_FLAGS \
+    $DEBUG_FLAG \
     -o "${build_dir}/${APP_NAME}" \
     $SWIFT_FILES \
     -framework SwiftUI \
