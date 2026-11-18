@@ -513,7 +513,7 @@ struct SettingsView: View {
                     && processKiller.pendingRestoreCount > 0
                     && !processKiller.isRestoring {
                     Label(
-                        lm.translate("Battery low, auto-restore resumes at ≥20%", "电量不足，≥20% 后自动恢复"),
+                        restoreGateHintText,
                         systemImage: "exclamationmark.triangle.fill"
                     )
                     .font(.caption2)
@@ -591,6 +591,17 @@ struct SettingsView: View {
     private var isRestoreGateDelayed: Bool {
         if case .delayedLowBattery = processKiller.restoreGateState { return true }
         return false
+    }
+
+    /// Banner copy differentiated by why the gate is held (design-spec §6.3):
+    /// an initial <20% on AC vs a pause (AC-615/617 / contact-issue).
+    private var restoreGateHintText: String {
+        switch processKiller.restoreGateReason {
+        case .paused:
+            return lm.translate("Battery low, auto-restore paused", "电量不足，自动恢复已暂停")
+        case .lowBattery:
+            return lm.translate("Battery low, auto-restore resumes at ≥20%", "电量不足，≥20% 后自动恢复")
+        }
     }
 
     /// Toggles selection for all non-system apps. If all are currently

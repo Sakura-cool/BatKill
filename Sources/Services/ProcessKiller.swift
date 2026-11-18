@@ -64,29 +64,28 @@ final class ProcessKiller: ObservableObject {
     /// progress caption and the wait-interval segment.
     @Published var restorePhase: RestorePhase = .idle
 
-    /// Auto-restore gate state (low-battery / contact-issue / in-progress).
-    /// Only the automatic restore path (AppDelegate) is gated; manual entries
-    /// (UI buttons) bypass it.
+    /// Auto-restore gate state (low-battery / contact-issue / in-progress);
+    /// only the automatic path is gated, manual entries bypass it.
     @Published var restoreGateState: RestoreGateState = .idle
 
-    /// Whether the current restore was started manually (UI entry). When true,
-    /// the AppDelegate's battery-percentage auto-pause logic (AC-615~617) is
-    /// skipped so a manual sequence is never blocked mid-run.
+    /// Why the gate is held, driving the banner copy (design-spec §6.3 / S5).
+    @Published var restoreGateReason: RestoreGateReason = .lowBattery
+
+    /// Whether the current restore was started manually (UI entry); when true,
+    /// the AppDelegate battery auto-pause logic (AC-615~617) is skipped.
     @Published var manualRestoreOverride: Bool = false
 
     /// Cancellation flag for the in-flight restore sequence. Checked at the
-    /// start of each iteration; when set, remaining apps are left in the
-    /// pending list (interrupted restore, AC-612/AC-613).
+    /// start of each iteration; when set, remaining apps stay pending (AC-612).
     var restoreCancelled = false
 
     /// Session token for the restore sequence. Incremented on each start; a
-    /// stale sequence's completion skips state application so an old run can
-    /// never clobber a newer one's `isRestoring`/`restorePhase`.
+    /// stale sequence's completion skips state application (never clobbers a
+    /// newer run's `isRestoring`/`restorePhase`).
     var restoreSession = 0
 
     /// Seconds to wait for a graceful `terminate()` before escalating to force
-    /// in `.graceful` mode. Longer than the 0.3s used by `killApplication`
-    /// (the force-chain fallback) so state-saving apps can persist their work.
+    /// (longer than the 0.3s force-chain fallback) so state-saving apps persist.
     private let gracefulWaitSeconds: TimeInterval = 2.0
 
     // MARK: - Init
@@ -154,8 +153,9 @@ final class ProcessKiller: ObservableObject {
         suspendedPaths = paths
     }
 
-    /// Read-only access to the list of app IDs pending restore (relaunch + resume).
-    var pendingRestoreAppIds: [String] { Array(Set(killedRestorePaths + suspendedPaths)) }
+    /// Read-only access to the list of app IDs pending restore (relaunch + resume),
+    /// in the pending list's original order (killed first, then suspended).
+    var pendingRestoreAppIds: [String] { orderedRestorePaths(killedRestorePaths, suspendedPaths) }
 
     /// Read-only access to the list of app IDs currently suspended (SIGSTOP-frozen).
     var suspendedAppIds: [String] { suspendedPaths }

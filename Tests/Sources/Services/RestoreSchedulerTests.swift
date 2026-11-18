@@ -38,6 +38,12 @@ final class RestoreSchedulerTests: TestCase {
         testRestoreIntervalBoundaries()
         testPowerContactIssue()
         testRestoreCancellation()
+        testGateDecision()
+        testBatteryDeltaAnalysis()
+        testChargerPowerWarning()
+        testSerialScheduling()
+        testNotificationGrouping()
+        testOrderedRestorePaths()
     }
 
     // MARK: - restoreInterval(forCPU:) boundaries
@@ -150,9 +156,10 @@ final class RestoreSchedulerTests: TestCase {
             // Flush the completion's async UserDefaults write.
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
 
-            // `Set` ordering is non-deterministic, so the exact preserved item
-            // is unknown -- but exactly the processed items are cleared and the
-            // remaining item is preserved. All 3 are `.app` paths that always
+            // Order is deterministic (`orderedRestorePaths` preserves the pending
+            // list order); the cancel lands during the wait after the first
+            // app, so the first two are processed and the third is preserved.
+            // All 3 are `.app` paths that always
             // "restore" (no real launch for non-existent paths), so 2 of 3 are
             // processed before the cancel takes effect.
             let remaining = UserDefaults.standard.stringArray(forKey: "killedRestorePaths") ?? []
@@ -165,6 +172,194 @@ final class RestoreSchedulerTests: TestCase {
             XCTAssertFalse(killer.restoreCancelled, "取消标志应在完成时复位")
             XCTAssertEqual(killer.restoreDone, 0, "进度计数应复位")
             XCTAssertEqual(killer.restoreTotal, 0, "进度总数应复位")
+        }
+    }
+
+    // MARK: - Low-battery gate decision (UT-011 / UT-012, AC-601/602)
+
+    func testGateDecision() {
+        runTest("门控：<20% → 延缓自动恢复") {
+            XCTAssertTrue(shouldDelayAutoRestore(batteryPercentage: 0))
+            XCTAssertTrue(shouldDelayAutoRestore(batteryPercentage: 19.9))
+        }
+        runTest("门控：=20%（含边界）→ 不延缓（进入恢复）") {
+            XCTAssertFalse(shouldDelayAutoRestore(batteryPercentage: 20))
+            XCTAssertFalse(shouldDelayAutoRestore(batteryPercentage: 50))
+            XCTAssertFalse(shouldDelayAutoRestore(batteryPercentage: 100))
+        }
+    }
+
+    // MARK: - Battery drain analysis (UT-015 / UT-016, AC-615/616)
+
+    func testBatteryDeltaAnalysis() {
+        let now = Date()
+        func snap(_ pcts: [Double], at offsets: [TimeInterval]) -> [(time: Date, pct: Double)] {
+            zip(pcts, offsets).map { (time: now.addingTimeInterval($1), pct: $0) }
+        }
+
+        runTest("电量Δ：接电且下降 → declining，非快速（Δ<5%/10s）") {
+            let s = snap([50, 48], at: [-8, 0])   // 10s 内降 2 点
+            let r = analyzeBatteryDelta(snapshots: s, now: now, onAC: true)
+            XCTAssertTrue(r.declining)
+            XCTAssertFalse(r.rapidDecline)
+        }
+        runTest("电量Δ：快速下降（Δ≥5%/10s）→ rapidDecline") {
+            let s = snap([50, 44.9], at: [-9, 0])  // 9s 内降 5.1 点
+            let r = analyzeBatteryDelta(snapshots: s, now: now, onAC: true)
+            XCTAssertTrue(r.declining)
+            XCTAssertTrue(r.rapidDecline)
+        }
+        runTest("电量Δ：Δ=5 恰好 10s → rapid（含边界）") {
+            let s = snap([50, 45], at: [-10, 0])
+            let r = analyzeBatteryDelta(snapshots: s, now: now, onAC: true)
+            XCTAssertTrue(r.rapidDecline)
+        }
+        runTest("电量Δ：窗口外（>10s 且 Δ≥5）→ 非 rapid") {
+            let s = snap([50, 44.9], at: [-11, 0])
+            let r = analyzeBatteryDelta(snapshots: s, now: now, onAC: true)
+            XCTAssertTrue(r.declining)
+            XCTAssertFalse(r.rapidDecline)
+        }
+        runTest("电量Δ：电池供电（非接电）→ 不标记（自然耗电预期）") {
+            let s = snap([50, 44.9], at: [-9, 0])
+            let r = analyzeBatteryDelta(snapshots: s, now: now, onAC: false)
+            XCTAssertFalse(r.declining)
+            XCTAssertFalse(r.rapidDecline)
+        }
+        runTest("电量Δ：上涨/空窗口 → 不标记") {
+            let up = snap([44.9, 50], at: [-9, 0])
+            XCTAssertFalse(analyzeBatteryDelta(snapshots: up, now: now, onAC: true).declining)
+            XCTAssertFalse(analyzeBatteryDelta(snapshots: [], now: now, onAC: true).declining)
+        }
+    }
+
+    // MARK: - Charger power warning (AC-619)
+
+    func testChargerPowerWarning() {
+        runTest("充电器功率：<80% + 接电 + 下降 → 警告") {
+            XCTAssertTrue(shouldWarnChargerPower(batteryPercentage: 0, onAC: true, declining: true))
+            XCTAssertTrue(shouldWarnChargerPower(batteryPercentage: 79.9, onAC: true, declining: true))
+        }
+        runTest("充电器功率：=80%（含边界）→ 不警告") {
+            XCTAssertFalse(shouldWarnChargerPower(batteryPercentage: 80, onAC: true, declining: true))
+            XCTAssertFalse(shouldWarnChargerPower(batteryPercentage: 100, onAC: true, declining: true))
+        }
+        runTest("充电器功率：电池供电（非接电）→ 不警告") {
+            XCTAssertFalse(shouldWarnChargerPower(batteryPercentage: 50, onAC: false, declining: true))
+        }
+        runTest("充电器功率：电量上升（非下降）→ 不警告") {
+            XCTAssertFalse(shouldWarnChargerPower(batteryPercentage: 50, onAC: true, declining: false))
+        }
+    }
+
+    // MARK: - Serial scheduling (UT-017, AC-603/604)
+
+    func testSerialScheduling() {
+        runTest("依次调度：串行有序 + CPU 感知间隔（每段时间一个）") {
+            let paths = ["/tmp/bk-seq-A.app", "/tmp/bk-seq-B.app", "/tmp/bk-seq-C.app"]
+            UserDefaults.standard.set(paths, forKey: "killedRestorePaths")
+            UserDefaults.standard.removeObject(forKey: "suspendedPaths")
+
+            let killer = ProcessKiller()
+            var sleepIntervals: [TimeInterval] = []
+            let cpuSamples: [Double] = [10, 80]   // 两个间隔：10%→2s, 80%→10s
+            var cpuIdx = 0
+            var completed = false
+            let hooks = RestoreTestHooks(
+                loadSampler: {
+                    let v = cpuSamples[min(cpuIdx, cpuSamples.count - 1)]
+                    cpuIdx += 1
+                    return v
+                },
+                sleep: { sleepIntervals.append($0) },
+                suppressCompletionNotification: true)
+            killer.restoreSequential(using: [], manual: true, testHooks: hooks,
+                                     completion: { completed = true })
+
+            let deadline = Date().addingTimeInterval(5)
+            while !completed && Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+            XCTAssertTrue(completed, "恢复序列应完成")
+            XCTAssertEqual(sleepIntervals.count, 2, "3 个应用间应有 2 次间隔等待")
+            XCTAssertEqual(sleepIntervals[0], 2, "CPU 10% → 间隔 2s")
+            XCTAssertEqual(sleepIntervals[1], 10, "CPU 80% → 间隔 10s")
+            XCTAssertEqual(cpuIdx, 2, "两个间隔各采样一次 CPU")
+            XCTAssertFalse(killer.isRestoring, "恢复状态应复位")
+            XCTAssertEqual(killer.restoreDone, 0, "进度计数应复位")
+            XCTAssertEqual(killer.restoreTotal, 0, "进度总数应复位")
+        }
+    }
+
+    // MARK: - Kill notification grouping (UT-018, AC-609)
+    func testNotificationGrouping() {
+        runTest("通知分组：按暂停方式分组 + 失败组") {
+            let apps = [
+                AppItem(name: "A", bundleIdentifier: nil, path: "/A.app",
+                        processName: "A", isSelected: true, isSystemApp: false,
+                        category: .application, serviceLabel: nil,
+                        suspendStrategy: .suspend),
+                AppItem(name: "B", bundleIdentifier: nil, path: "/B.app",
+                        processName: "B", isSelected: true, isSystemApp: false,
+                        category: .application, serviceLabel: nil,
+                        suspendStrategy: .graceful),
+                AppItem(name: "C", bundleIdentifier: nil, path: "/C.app",
+                        processName: "C", isSelected: true, isSystemApp: false,
+                        category: .application, serviceLabel: nil,
+                        suspendStrategy: .force),
+                AppItem(name: "D", bundleIdentifier: nil, path: "/D.app",
+                        processName: "D", isSelected: true, isSystemApp: false,
+                        category: .application, serviceLabel: nil,
+                        suspendStrategy: .graceful)
+            ]
+            let results: [String: Bool] = ["A": true, "B": true, "C": false, "D": true, "E": true]
+            let groups = groupKillNotifications(apps: apps, results: results)
+            XCTAssertEqual(groups.suspended, ["A"], "挂起组")
+            XCTAssertEqual(groups.graceful, ["B", "D"], "优雅组（保序）")
+            XCTAssertEqual(groups.force, [], "强制组（C 失败，不入成功组）")
+            XCTAssertEqual(groups.failed, ["C"], "失败组")
+        }
+        runTest("通知分组：成功全挂起 → 仅挂起组非空") {
+            let apps = [
+                AppItem(name: "X", bundleIdentifier: nil, path: "/X.app",
+                        processName: "X", isSelected: true, isSystemApp: false,
+                        category: .application, serviceLabel: nil,
+                        suspendStrategy: .suspend)
+            ]
+            let groups = groupKillNotifications(apps: apps, results: ["X": true])
+            XCTAssertEqual(groups.suspended, ["X"])
+            XCTAssertTrue(groups.graceful.isEmpty)
+            XCTAssertTrue(groups.force.isEmpty)
+            XCTAssertTrue(groups.failed.isEmpty)
+        }
+        runTest("通知分组：空结果 → 全空（无 body）") {
+            let groups = groupKillNotifications(apps: [], results: [:])
+            XCTAssertTrue(groups.suspended.isEmpty)
+            XCTAssertTrue(groups.graceful.isEmpty)
+            XCTAssertTrue(groups.force.isEmpty)
+            XCTAssertTrue(groups.failed.isEmpty)
+        }
+    }
+
+    // MARK: - Ordered restore path union (S3, AC-603)
+
+    func testOrderedRestorePaths() {
+        runTest("保序并集：保留待恢复列表原顺序（killed 先，suspended 后）") {
+            let paths = orderedRestorePaths(
+                ["/A.app", "/B.app", "/C.app"],
+                ["/B.app", "/D.app"])
+            XCTAssertEqual(paths, ["/A.app", "/B.app", "/C.app", "/D.app"],
+                           "应保留 killed 顺序 + suspended 去重追加，不因 Set 打乱")
+        }
+        runTest("保序并集：空列表 → 空") {
+            XCTAssertEqual(orderedRestorePaths([], []), [])
+        }
+        runTest("保序并集：仅 suspended") {
+            XCTAssertEqual(orderedRestorePaths([], ["/X.app", "/Y.app"]), ["/X.app", "/Y.app"])
+        }
+        runTest("保序并集：完全重叠 → killed 顺序（无重复）") {
+            XCTAssertEqual(orderedRestorePaths(["/A.app", "/B.app"], ["/A.app", "/B.app"]),
+                           ["/A.app", "/B.app"])
         }
     }
 }

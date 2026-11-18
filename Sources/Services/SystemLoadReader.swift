@@ -26,6 +26,19 @@ final class SystemLoadReader {
     /// Last sampled tick counters (user, system, idle, nice).
     private var lastTicks: (user: UInt32, system: UInt32, idle: UInt32, nice: UInt32)?
 
+    /// Cached host port send right. `mach_host_self()` returns a new send
+    /// right per call that the caller must release; caching it once avoids
+    /// a per-sample acquisition/leak (the host port is system-wide and the
+    /// reader lives for the app's lifetime).
+    private lazy var hostPort: mach_port_t = mach_host_self()
+
+    deinit {
+        if hasAcquiredHostPort {
+            mach_port_deallocate(mach_task_self_, hostPort)
+        }
+    }
+    private var hasAcquiredHostPort = false
+
     /// Returns the average CPU usage percentage since the previous sample.
     /// Returns 0 on the first call (baseline) or when the read fails.
     func currentUsage() -> Double {
@@ -33,9 +46,10 @@ final class SystemLoadReader {
         var count = mach_msg_type_number_t(
             MemoryLayout<host_cpu_load_info>.size / MemoryLayout<integer_t>.size
         )
+        if !hasAcquiredHostPort { hasAcquiredHostPort = true }
         let result = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, $0, &count)
+                host_statistics(hostPort, HOST_CPU_LOAD_INFO, $0, &count)
             }
         }
         guard result == KERN_SUCCESS else {
@@ -44,11 +58,13 @@ final class SystemLoadReader {
 
         let t = info.cpu_ticks
         if let last = lastTicks {
-            // Modular subtraction handles counter wraparound.
-            let dUser = t.0 &- last.0
-            let dSys = t.1 &- last.1
-            let dIdle = t.2 &- last.2
-            let dNice = t.3 &- last.3
+            // Modular subtraction handles counter wraparound; the sums are
+            // widened to Int so a long inter-sample gap (or many cores) cannot
+            // overflow UInt32 and trap.
+            let dUser = Int(t.0 &- last.0)
+            let dSys = Int(t.1 &- last.1)
+            let dIdle = Int(t.2 &- last.2)
+            let dNice = Int(t.3 &- last.3)
             let total = dUser + dSys + dIdle + dNice
             lastTicks = (t.0, t.1, t.2, t.3)
             guard total > 0 else { return 0 }

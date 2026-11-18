@@ -124,6 +124,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     /// warning is not repeated on every subsequent snapshot.
     private var rapidDeclineNotified = false
 
+    /// Whether the charger-power-insufficient warning (AC-619) was already
+    /// notified for the current weak-charger episode, re-armed when the
+    /// condition clears (battery >=80%, on battery, or no longer declining).
+    private var chargerPowerNotified = false
+
+    /// Low-frequency battery re-evaluation timer (B1). `BatteryMonitor` publishes
+    /// `batteryPercentage` only on IOKit power-source events; during steady
+    /// charging below 20% there are no events, so AC-602 (resume at >=20%)
+    /// would never fire. While the low-battery gate is held, poll every 30s to
+    /// detect the threshold and resume auto-restore. Runs ONLY in the rare
+    /// gated state (AC + <20%), so idle power stays unaffected.
+    private var lowBatteryGateTimer: Timer?
+
     // MARK: - Power-Action Queue
 
     // 三态语义（nil=无等待 / true=电池动作 / false=交流电动作），见 AGENTS.md「注意事项」；非可选布尔误用
@@ -790,10 +803,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
             // Auto restore on AC power -- gated by low battery (AC-601/602).
             if batteryMonitor.batteryPercentage < 20 {
                 processKiller.restoreGateState = .delayedLowBattery
+                processKiller.restoreGateReason = .lowBattery
                 actionCtx.log("电量不足(<20%)，自动恢复延缓，待恢复列表保留")
                 postSystemNotification(loc("Battery low, restore delayed (<20%)", "电量不足，恢复延缓（<20%）"))
                 // No cooldown: the >=20% battery subscription resumes restore.
                 powerActionInProgress = false
+                syncLowBatteryGateTimer()
             } else {
                 processKiller.restoreGateState = .idle
                 processKiller.restoreSequential(using: appLister.apps, manual: false, context: actionCtx) { [weak self] in
@@ -832,9 +847,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         guard !contactIssue else { return }
 
         // AC-617: below 20% while restoring on AC -> pause auto-restore.
-        if pct < 20 {
+        if shouldDelayAutoRestore(batteryPercentage: pct) {
             if !batteryMonitor.isOnBattery && processKiller.restoreGateState != .delayedLowBattery {
                 processKiller.restoreGateState = .delayedLowBattery
+                processKiller.restoreGateReason = .paused
                 postSystemNotification(loc("Battery low, auto-restore paused", "电量不足，自动恢复已暂停"))
             }
             rapidDeclineNotified = false
@@ -844,29 +860,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         // AC-615/616: decline / rapid-decline over the sliding window. Only
         // meaningful while on AC (weak charger / high consumption during the
         // restore); on battery, natural drain is the expected state.
-        if !batteryMonitor.isOnBattery, let earliest = batterySnapshots.first, earliest.pct > pct {
-            let delta = pct - earliest.pct
-            let span = now.timeIntervalSince(earliest.time)
-            if processKiller.restoreGateState != .delayedLowBattery {
+        let deltaStatus = analyzeBatteryDelta(
+            snapshots: batterySnapshots, now: now,
+            onAC: !batteryMonitor.isOnBattery)
+        if deltaStatus.declining {
+            // AC-615 is restore-context specific ("恢复后电量下降"): only pause
+            // + notify "电源不足" when a restore is in progress or just finished.
+            // An idle AC decline (weak charger, no restore) is the charger-
+            // insufficient case (AC-619) and must NOT pause the gate (S5).
+            let restoreContext = processKiller.isRestoring
+                || processKiller.restoreGateState == .restoring
+                || processKiller.restoreGateState == .completed
+            if restoreContext && processKiller.restoreGateState != .delayedLowBattery {
                 processKiller.restoreGateState = .delayedLowBattery
+                processKiller.restoreGateReason = .paused
                 postSystemNotification(loc("Insufficient power", "电源不足"))
             }
-            if span <= 10 && delta <= -5 && !rapidDeclineNotified {
+            if deltaStatus.rapidDecline && !rapidDeclineNotified {
                 rapidDeclineNotified = true
                 postSystemNotification(loc("Power consumption high — check connected apps", "消耗过大，建议处理"))
             }
+            // AC-619: below 80% yet still draining while on AC -> the charger
+            // cannot keep up; name the root cause and suggest a larger charger.
+            if shouldWarnChargerPower(batteryPercentage: pct,
+                                      onAC: !batteryMonitor.isOnBattery,
+                                      declining: true)
+                && !chargerPowerNotified {
+                chargerPowerNotified = true
+                postSystemNotification(loc("Charger power insufficient — use a higher power charger",
+                                           "充电器功率不足，请更换更大功率的充电器进行充电"))
+            }
         } else {
             rapidDeclineNotified = false
+            chargerPowerNotified = false
         }
 
         // AC-602: gate cleared (>=20% on AC, not already restoring) -> resume
-        // the auto-restore sequence.
-        if !batteryMonitor.isOnBattery && pct >= 20
+        // the auto-restore sequence. Routed through the power queue so the
+        // restore respects the in-progress mutex and 30s cooldown (S4).
+        if !batteryMonitor.isOnBattery && !shouldDelayAutoRestore(batteryPercentage: pct)
             && processKiller.restoreGateState == .delayedLowBattery
             && !processKiller.isRestoring {
             processKiller.restoreGateState = .idle
             postSystemNotification(loc("Battery sufficient, restore started", "电量充足，开始恢复"))
-            processKiller.restoreSequential(using: appLister.apps, manual: false)
+            queuePowerAction(isOnBattery: false)
+        }
+        syncLowBatteryGateTimer()
+    }
+
+    /// Starts or stops the low-battery gate polling timer (B1). The timer is
+    /// active only while the gate is held (`.delayedLowBattery` on AC); it is
+    /// invalidated as soon as the gate clears, the Mac unplugs, or a manual
+    /// override engages, keeping idle power unaffected.
+    private func syncLowBatteryGateTimer() {
+        let shouldPoll = processKiller.restoreGateState == .delayedLowBattery
+            && !batteryMonitor.isOnBattery
+            && !processKiller.manualRestoreOverride
+        if shouldPoll {
+            guard lowBatteryGateTimer == nil else { return }
+            let timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                self?.batteryMonitor.checkPowerState()
+            }
+            timer.tolerance = 5
+            lowBatteryGateTimer = timer
+        } else {
+            lowBatteryGateTimer?.invalidate()
+            lowBatteryGateTimer = nil
         }
     }
 
@@ -882,14 +941,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         case .pause:
             processKiller.cancelRestore()
             processKiller.restoreGateState = .delayedLowBattery
+            processKiller.restoreGateReason = .paused
             logger("resolveContactIssue: 暂停恢复，待恢复列表保留")
         case .ignore:
             logger("resolveContactIssue: 忽略接触异常，继续恢复")
-            processKiller.restoreSequential(using: appLister.apps, manual: false)
+            // Route through the power queue (mutex/cooldown) and guard against
+            // re-entry: the alert's dismiss binding and the button action may
+            // both resolve, so never start a second sequence (S4/S6).
+            if !processKiller.isRestoring {
+                queuePowerAction(isOnBattery: false)
+            }
         case .stop:
             processKiller.cancelRestore()
             logger("resolveContactIssue: 停止，保持停止状态")
         }
+        syncLowBatteryGateTimer()
     }
 
     /// Posts a system (UNUserNotificationCenter) notification with the BatKill

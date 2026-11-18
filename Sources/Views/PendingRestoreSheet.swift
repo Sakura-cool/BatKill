@@ -44,6 +44,17 @@ struct PendingRestoreSheet: View {
         return false
     }
 
+    /// Banner copy differentiated by why the gate is held (design-spec §6.3):
+    /// an initial <20% on AC vs a pause (AC-615/617 / contact-issue).
+    private var restoreGateHintText: String {
+        switch processKiller.restoreGateReason {
+        case .paused:
+            return lm.translate("Battery low, auto-restore paused", "电量不足，自动恢复已暂停")
+        case .lowBattery:
+            return lm.translate("Battery low, auto-restore resumes at ≥20%", "电量不足，≥20% 后自动恢复")
+        }
+    }
+
     /// Resolves each pending restore ID into a display tuple of
     /// (id, display name, category, isSuspended). Falls back to the file's
     /// last path component if the app is no longer in the app list.
@@ -228,7 +239,7 @@ struct PendingRestoreSheet: View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.caption)
-            Text(lm.translate("Battery low, auto-restore resumes at ≥20%", "电量不足，≥20% 后自动恢复"))
+            Text(restoreGateHintText)
                 .font(.caption)
             Spacer()
             Text(lm.translate("Manual restore is not affected", "手动恢复不受影响"))

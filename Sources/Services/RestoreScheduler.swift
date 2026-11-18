@@ -43,6 +43,14 @@ enum RestoreGateState: Equatable {
     case completed
 }
 
+/// Why the low-battery gate is held, so UI can differentiate the banner copy:
+/// an initial <20% on AC (">=20% 后自动恢复") vs a pause (AC-615/617 or
+/// contact-issue "暂停") which reads "自动恢复已暂停" (design-spec §6.3 / S5).
+enum RestoreGateReason: Equatable {
+    case lowBattery
+    case paused
+}
+
 // MARK: - Restore Notification Mode (v0.2.6)
 
 /// Restore notification flavor: sequential (ordered, interval-paced) vs
@@ -87,6 +95,99 @@ func isPowerContactIssue(flipTimes: [Date], now: Date = Date(),
     return recent >= threshold
 }
 
+// MARK: - Low-battery gate + drain analysis (v0.2.6, AC-601/602/615-617)
+
+/// The auto-restore gate decision: auto-restore is delayed while on AC and the
+/// battery is below 20% (AC-601); it resumes at >=20% (AC-602). Manual restore
+/// bypasses this entirely (AC-608/AC-618).
+func shouldDelayAutoRestore(batteryPercentage: Double) -> Bool {
+    batteryPercentage < 20
+}
+
+/// The charger's output is insufficient when the battery is below 80% yet still
+/// draining while on AC power — the charger cannot keep up with system
+/// consumption (AC-619). Distinct from the generic "电源不足" (AC-615): this
+/// names the actionable root cause and asks the user to use a larger charger.
+func shouldWarnChargerPower(batteryPercentage: Double, onAC: Bool, declining: Bool) -> Bool {
+    batteryPercentage < 80 && onAC && declining
+}
+
+/// Result of analyzing the battery's recent trajectory over a sliding window.
+struct BatteryDeltaStatus: Equatable {
+    /// True when the battery is draining while on AC (weak charger / high
+    /// consumption) -- a decline from the oldest snapshot to the newest.
+    let declining: Bool
+    /// True when the battery dropped >=5 percentage points within 10s (AC-616).
+    let rapidDecline: Bool
+}
+
+/// Analyzes a sliding window of battery snapshots (already trimmed to 10s).
+/// `onAC` means the Mac is on AC power; drain only matters there (on battery,
+/// natural drain is expected and not flagged). Faithful to the AppDelegate
+/// handler: declining = onAC && oldest > newest; rapid = span<=10s && delta<=-5.
+func analyzeBatteryDelta(snapshots: [(time: Date, pct: Double)],
+                         now: Date, onAC: Bool) -> BatteryDeltaStatus {
+    guard onAC, let first = snapshots.first, let last = snapshots.last,
+          first.pct > last.pct else {
+        return BatteryDeltaStatus(declining: false, rapidDecline: false)
+    }
+    let delta = last.pct - first.pct
+    let span = now.timeIntervalSince(first.time)
+    return BatteryDeltaStatus(declining: true,
+                              rapidDecline: span <= 10 && delta <= -5)
+}
+
+// MARK: - Ordered restore path union (v0.2.6, AC-603)
+
+/// Order-preserving union of the killed (relaunch) and suspended (resume) ID
+/// lists, keeping the first occurrence of each ID. `Array(Set(...))` would
+/// destroy the stable "待恢复列表原顺序" contract (design-spec §1.3 / AC-603):
+/// sequential restore must visit apps in the pending list's original order.
+func orderedRestorePaths(_ killed: [String], _ suspended: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for path in killed + suspended where seen.insert(path).inserted {
+        result.append(path)
+    }
+    return result
+}
+
+// MARK: - Kill notification grouping (v0.2.6, AC-609)
+
+/// Grouped app names by pause strategy, used to compose a state-aware kill
+/// notification (each app in exactly one group).
+struct KillNotificationGroups: Equatable {
+    let suspended: [String]
+    let graceful: [String]
+    let force: [String]
+    let failed: [String]
+}
+
+/// Partitions killed apps by `suspendStrategy` (success) or failure, with
+/// non-empty groups only -- the notification body lists each group on its own
+/// line instead of a flat "已停止: list" (AC-609).
+func groupKillNotifications(apps: [AppItem],
+                            results: [String: Bool]) -> KillNotificationGroups {
+    var suspended: [String] = []
+    var graceful: [String] = []
+    var force: [String] = []
+    var failed: [String] = []
+    for app in apps {
+        guard let success = results[app.name] else { continue }
+        if success {
+            switch app.suspendStrategy {
+            case .suspend:  suspended.append(app.name)
+            case .graceful: graceful.append(app.name)
+            case .force:    force.append(app.name)
+            }
+        } else {
+            failed.append(app.name)
+        }
+    }
+    return KillNotificationGroups(suspended: suspended, graceful: graceful,
+                                  force: force, failed: failed)
+}
+
 // MARK: - Restore Test Hooks (v0.2.6)
 
 /// Injectable dependencies for `restoreSequential`, used only by unit tests to
@@ -97,11 +198,18 @@ struct RestoreTestHooks {
     var loadSampler: (() -> Double)?
     /// Wait between apps; defaults to a real `Thread.sleep`.
     var sleep: (TimeInterval) -> Void
+    /// Suppress the completion notification. Unit tests cannot post real
+    /// `UserNotifications` (the test binary has no app bundle / notification
+    /// context), so tests that complete a sequence set this to avoid the
+    /// `UNUserNotificationCenter.current()` trap. Production defaults to `false`.
+    var suppressCompletionNotification: Bool
 
     init(loadSampler: (() -> Double)? = nil,
-         sleep: @escaping (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }) {
+         sleep: @escaping (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) },
+         suppressCompletionNotification: Bool = false) {
         self.loadSampler = loadSampler
         self.sleep = sleep
+        self.suppressCompletionNotification = suppressCompletionNotification
     }
 }
 
@@ -135,7 +243,7 @@ extension ProcessKiller {
         let ctx = context ?? LogContext(name: "restoreSequential")
         // Union of killed apps (relaunch) and suspended apps (SIGCONT resume),
         // preserving the pending list's order for a stable, ordered sequence.
-        let paths = Array(Set(killedRestorePaths + suspendedPaths))
+        let paths = orderedRestorePaths(killedRestorePaths, suspendedPaths)
         guard !paths.isEmpty else {
             ctx.log("没有需要恢复的应用")
             DispatchQueue.main.async { completion?() }
@@ -158,8 +266,14 @@ extension ProcessKiller {
             var restoredIds: [String] = []
 
             for (i, appId) in paths.enumerated() {
+                // Snapshot the cancellation flag once per iteration. It is
+                // written on the main thread (`cancelRestore`/`killSelected`)
+                // and read here on the background queue; `Bool` is word-size
+                // aligned so single-byte reads are atomic on arm64/x86_64, but
+                // we avoid repeatedly re-reading a cross-thread value.
+                let cancelled = self.restoreCancelled
                 // Cancellation: break and leave the remaining apps pending.
-                if self.restoreCancelled {
+                if cancelled {
                     ctx.log("依次恢复被取消，保留剩余 \(paths.count - i) 个未恢复项")
                     break
                 }
@@ -227,7 +341,7 @@ extension ProcessKiller {
                 }
                 self.restoreTotal = 0
                 self.restoreDone = 0
-                if !restoredIds.isEmpty && !wasCancelled {
+                if !restoredIds.isEmpty && !wasCancelled && !testHooks.suppressCompletionNotification {
                     self.postRestoreNotification(mode: .sequential, count: restoredIds.count)
                 }
                 completion?()
@@ -264,36 +378,20 @@ extension ProcessKiller {
     /// failed. Each app is assigned to exactly one group by its
     /// `suspendStrategy`; empty groups are omitted (design-spec §5.1 / AC-609).
     func postKillNotification(apps: [AppItem], results: [String: Bool]) {
-        var suspended: [String] = []
-        var graceful: [String] = []
-        var force: [String] = []
-        var failed: [String] = []
-
-        for app in apps {
-            guard let success = results[app.name] else { continue }
-            if success {
-                switch app.suspendStrategy {
-                case .suspend:  suspended.append(app.name)
-                case .graceful: graceful.append(app.name)
-                case .force:    force.append(app.name)
-                }
-            } else {
-                failed.append(app.name)
-            }
-        }
+        let groups = groupKillNotifications(apps: apps, results: results)
 
         var bodyParts: [String] = []
-        if !suspended.isEmpty {
-            bodyParts.append(loc("Suspended: %@", "已挂起：%@", suspended.joined(separator: ", ")))
+        if !groups.suspended.isEmpty {
+            bodyParts.append(loc("Suspended: %@", "已挂起：%@", groups.suspended.joined(separator: ", ")))
         }
-        if !graceful.isEmpty {
-            bodyParts.append(loc("Gracefully quit: %@", "已优雅退出：%@", graceful.joined(separator: ", ")))
+        if !groups.graceful.isEmpty {
+            bodyParts.append(loc("Gracefully quit: %@", "已优雅退出：%@", groups.graceful.joined(separator: ", ")))
         }
-        if !force.isEmpty {
-            bodyParts.append(loc("Force quit: %@", "已强制退出：%@", force.joined(separator: ", ")))
+        if !groups.force.isEmpty {
+            bodyParts.append(loc("Force quit: %@", "已强制退出：%@", groups.force.joined(separator: ", ")))
         }
-        if !failed.isEmpty {
-            bodyParts.append(loc("Failed: %@", "失败：%@", failed.joined(separator: ", ")))
+        if !groups.failed.isEmpty {
+            bodyParts.append(loc("Failed: %@", "失败：%@", groups.failed.joined(separator: ", ")))
         }
         let body = bodyParts.joined(separator: "\n")
         guard !body.isEmpty else { return }
