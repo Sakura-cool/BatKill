@@ -266,6 +266,11 @@ final class LogQueue {
         let messages = buffer
         buffer = []
 
+        // Rotate BEFORE writing so the newest batch always lands in the active
+        // log: rotating after the write would gzip the just-written lines into
+        // .gz, making recent output disappear from the tail-followed active file.
+        rotateIfNeeded()
+
         let data = messages.joined(separator: "\n").appending("\n").data(using: .utf8)
         if let data {
             if let fh = FileHandle(forWritingAtPath: logPath) {
@@ -275,7 +280,6 @@ final class LogQueue {
             } else {
                 try? data.write(to: URL(fileURLWithPath: logPath), options: .atomic)
             }
-            rotateIfNeeded()
         }
 
         isFlushing = false
