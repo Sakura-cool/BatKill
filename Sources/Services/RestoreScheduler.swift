@@ -49,6 +49,10 @@ enum RestoreGateState: Equatable {
 enum RestoreGateReason: Equatable {
     case lowBattery
     case paused
+    /// Contact-issue "Pause restore" (AC-614): the gate is held because the
+    /// user chose to pause after a loose-power warning, NOT because of low
+    /// battery — so the banner must not say "电量不足" (S5 文案误用修复).
+    case contactIssue
 }
 
 // MARK: - Restore Notification Mode (v0.2.6)

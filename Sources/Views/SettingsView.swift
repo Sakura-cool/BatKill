@@ -601,6 +601,8 @@ struct SettingsView: View {
             return lm.translate("Battery low, auto-restore paused", "电量不足，自动恢复已暂停")
         case .lowBattery:
             return lm.translate("Battery low, auto-restore resumes at ≥20%", "电量不足，≥20% 后自动恢复")
+        case .contactIssue:
+            return lm.translate("Power contact unstable, auto-restore paused", "电源接触不良，自动恢复已暂停")
         }
     }
 

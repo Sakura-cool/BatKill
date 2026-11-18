@@ -941,7 +941,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         case .pause:
             processKiller.cancelRestore()
             processKiller.restoreGateState = .delayedLowBattery
-            processKiller.restoreGateReason = .paused
+            processKiller.restoreGateReason = .contactIssue
             logger("resolveContactIssue: 暂停恢复，待恢复列表保留")
         case .ignore:
             logger("resolveContactIssue: 忽略接触异常，继续恢复")
