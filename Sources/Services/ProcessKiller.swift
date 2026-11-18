@@ -212,8 +212,8 @@ final class ProcessKiller: ObservableObject {
     ///   after they drop out of the live `apps` list. Apps that fail to
     ///   restore are left in the pending list.
     func restoreSelected(_ apps: [AppItem], selectedPaths: Set<String>, completion: (() -> Void)? = nil) {
-        // Union of killed (relaunch) and suspended (resume) pending apps.
-        let pending = Array(Set(killedRestorePaths + suspendedPaths))
+        // Union of killed (relaunch) + suspended (resume) pending apps, in list order (AC-603/S3).
+        let pending = orderedRestorePaths(killedRestorePaths, suspendedPaths)
         let toRestore = pending.filter { selectedPaths.contains($0) }
         guard !toRestore.isEmpty else {
             logger("restoreSelected: no selected apps in pending list")
@@ -334,10 +334,10 @@ final class ProcessKiller: ObservableObject {
     /// and posts a notification with the names of restored apps.
     func restoreKilledApps(using apps: [AppItem], context: LogContext? = nil, completion: (() -> Void)? = nil) {
         let ctx = context ?? LogContext(name: "restoreKilledApps")
-        // Union of killed apps (relaunch) and suspended apps (SIGCONT resume).
-        // A suspended app is never also in `killedRestorePaths`, but the union
-        // keeps the restore path robust against stale entries in either list.
-        let paths = Array(Set(killedRestorePaths + suspendedPaths))
+        // Union of killed apps (relaunch) and suspended apps (SIGCONT resume);
+        // never both in one list, but robust against stale entries. Preserves
+        // the pending list's order (AC-603 / S3).
+        let paths = orderedRestorePaths(killedRestorePaths, suspendedPaths)
         guard !paths.isEmpty else {
             ctx.log("没有需要恢复的应用")
             DispatchQueue.main.async { completion?() }
