@@ -83,6 +83,70 @@ func restoreInterval(forCPU cpuUsage: Double) -> TimeInterval {
     }
 }
 
+// MARK: - Power-Slope Restore Pacing (v0.2.6, AC-620)
+
+/// The power-curve slope (W/s) the restore may tolerate, computed DYNAMICALLY
+/// from runtime state so nothing is hard-coded per machine/battery/charger:
+/// a low-power charger (small headroom), aged battery (low health), or a low
+/// charge level all tighten the allowed slope, keeping the restore from
+/// spiking the power curve into a battery-protection shutdown.
+///
+/// - Parameters:
+///   - headroomW: charger headroom in watts (chargerW - currentPowerW); 0 when
+///     the machine already draws more than the charger can supply.
+///   - batteryHealth: 0-1, FullChargeCapacity/DesignCapacity.
+///   - batteryLevel: 0-1, current charge fraction.
+func allowedPowerSlope(headroomW: Double, batteryHealth: Double, batteryLevel: Double) -> Double {
+    // Headroom factor 0.3-1.0: 0W headroom -> 0.3, >=15W -> 1.0 (continuous).
+    let headroom = min(max(headroomW, 0), 15) / 15
+    let headroomFactor = 0.3 + 0.7 * headroom
+    // Health/level factors 0.5-1.0: aged battery or low charge tighten slope.
+    let health = min(max(batteryHealth, 0), 1)
+    let level = min(max(batteryLevel, 0), 1)
+    let healthFactor = 0.5 + 0.5 * health
+    let levelFactor = 0.5 + 0.5 * level
+    // Baseline 2.5 W/s for a healthy, well-charged machine with ample headroom;
+    // the three runtime factors scale it down (never hard-coded to a fixed wattage).
+    return 2.5 * headroomFactor * healthFactor * levelFactor
+}
+
+/// The restore wait interval (seconds) for the current power state and the
+/// measured power-curve slope. Longer than `restoreInterval(forCPU:)` when the
+/// power state is tight (small headroom) or the slope is steep, so sequential
+/// restore flattens the power curve. Pure + injectable so it is unit-testable.
+///
+/// - Parameters:
+///   - currentPowerW: instantaneous whole-system power draw.
+///   - chargerWatts: connected charger's rated wattage.
+///   - batteryHealth: 0-1.
+///   - batteryLevel: 0-1.
+///   - measuredSlope: observed power-curve slope (W/s) since the last launch.
+func powerRestoreInterval(currentPowerW: Double, chargerWatts: Double,
+                          batteryHealth: Double, batteryLevel: Double,
+                          measuredSlope: Double) -> TimeInterval {
+    let headroom = max(0, chargerWatts - currentPowerW)
+    let allowed = allowedPowerSlope(headroomW: headroom,
+                                    batteryHealth: batteryHealth,
+                                    batteryLevel: batteryLevel)
+    // Slope ratio: measured vs allowed. Ratio >1 means the curve is steeper
+    // than tolerable -> slow down. No measurable slope (first sample) = 0.
+    let ratio = allowed > 0 ? measuredSlope / allowed : 2.0
+    var interval: TimeInterval
+    if ratio > 1.5 {
+        interval = 10
+    } else if ratio > 1.0 {
+        interval = 6
+    } else if ratio > 0.8 {
+        interval = 4
+    } else {
+        interval = 2
+    }
+    // Tight headroom (charger near its limit) is itself risky even at a low
+    // slope: scale up. <3W -> 2x, <8W -> 1.5x.
+    let headroomConstraint = headroom < 3 ? 2.0 : (headroom < 8 ? 1.5 : 1.0)
+    return min(max(interval * headroomConstraint, 2), 20)
+}
+
 // MARK: - Power Contact Issue Pure Function (v0.2.6)
 
 /// Detects a power contact issue: whether `flipTimes` contains `>= threshold`
@@ -200,6 +264,8 @@ func groupKillNotifications(apps: [AppItem],
 struct RestoreTestHooks {
     /// Overrides CPU sampling; `nil` uses the real `SystemLoadReader`.
     var loadSampler: (() -> Double)?
+    /// Overrides power sampling; `nil` uses the real `PowerLoadReader`.
+    var powerSampler: (() -> PowerSample)?
     /// Wait between apps; defaults to a real `Thread.sleep`.
     var sleep: (TimeInterval) -> Void
     /// Suppress the completion notification. Unit tests cannot post real
@@ -209,17 +275,39 @@ struct RestoreTestHooks {
     var suppressCompletionNotification: Bool
 
     init(loadSampler: (() -> Double)? = nil,
+         powerSampler: (() -> PowerSample)? = nil,
          sleep: @escaping (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) },
          suppressCompletionNotification: Bool = false) {
         self.loadSampler = loadSampler
+        self.powerSampler = powerSampler
         self.sleep = sleep
         self.suppressCompletionNotification = suppressCompletionNotification
     }
 }
 
+/// Snapshot of the power profile used by slope-aware restore pacing (AC-620):
+/// instantaneous whole-system power, charger wattage, battery health and level.
+/// Produced by `PowerLoadReader` (or injected in tests).
+struct PowerSample {
+    let power: Double      // whole-system power draw, W
+    let charger: Double    // connected charger rated wattage, W
+    let health: Double     // battery health 0-1 (FullCharge/Design)
+    let level: Double      // battery charge level 0-1
+}
+
 // MARK: - ProcessKiller: Restore Scheduler (v0.2.6)
 
 extension ProcessKiller {
+
+    /// Reads a power-profile snapshot, degrading gracefully (0W / 0 charger /
+    /// health 1 / level 1) when the AppleSmartBattery registry is unavailable.
+    private static func samplePower(_ reader: PowerLoadReader) -> PowerSample {
+        PowerSample(
+            power: reader.currentPowerWatts() ?? 0,
+            charger: reader.chargerWatts() ?? 0,
+            health: reader.batteryHealth() ?? 1,
+            level: reader.batteryLevel() ?? 1)
+    }
 
     /// Restores ALL pending apps one at a time, ordered, paced by system load.
     ///
@@ -244,6 +332,14 @@ extension ProcessKiller {
                            context: LogContext? = nil,
                            testHooks: RestoreTestHooks = RestoreTestHooks(),
                            completion: (() -> Void)? = nil) {
+        // S4: one restore sequence at a time. A concurrent start (e.g. after a
+        // cancel that unlocked the UI before the loop exited) is rejected
+        // rather than overlapping the in-flight loop and double-launching apps.
+        guard !isRestoring else {
+            logger("restoreSequential: 恢复已在进行，忽略重复启动")
+            completion?()
+            return
+        }
         let ctx = context ?? LogContext(name: "restoreSequential")
         // Union of killed apps (relaunch) and suspended apps (SIGCONT resume),
         // preserving the pending list's order for a stable, ordered sequence.
@@ -260,14 +356,23 @@ extension ProcessKiller {
         let session = restoreSession + 1
         restoreSession = session
         isRestoring = true
-        restoreGateState = .restoring
+        // Preserve a held low-battery gate (S3): a manual restore must not
+        // clear the auto-resume contract. Only set .restoring when no gate is
+        // held; the completion keeps `.delayedLowBattery` intact below.
+        if restoreGateState != .delayedLowBattery {
+            restoreGateState = .restoring
+        }
         restoreTotal = paths.count
         restoreDone = 0
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             let loadReader = SystemLoadReader()
+            let powerReader = PowerLoadReader()
             var restoredIds: [String] = []
+            // Slope (W/s) measured for the previous launch, used to pace the
+            // next one (AC-620). 0 on the first step (no prior sample).
+            var lastSlope: Double = 0
 
             for (i, appId) in paths.enumerated() {
                 // Snapshot the cancellation flag once per iteration. It is
@@ -276,25 +381,43 @@ extension ProcessKiller {
                 // aligned so single-byte reads are atomic on arm64/x86_64, but
                 // we avoid repeatedly re-reading a cross-thread value.
                 let cancelled = self.restoreCancelled
-                // Cancellation: break and leave the remaining apps pending.
-                if cancelled {
+                // Cancellation, or a newer sequence superseding this one, stops
+                // the loop and leaves the remaining apps pending (S4). The
+                // session check makes a stale loop (UI already unlocked on
+                // cancel) exit instead of launching apps alongside a newer run.
+                if cancelled || self.restoreSession != session {
                     ctx.log("依次恢复被取消，保留剩余 \(paths.count - i) 个未恢复项")
                     break
                 }
 
-                // First app restores immediately; later apps are load-paced.
+                // First app restores immediately; later apps are paced by the
+                // more conservative of CPU load and the power-curve slope.
                 if i > 0 {
                     let cpu = testHooks.loadSampler?() ?? loadReader.currentUsage()
-                    let interval = restoreInterval(forCPU: cpu)
+                    let cpuInterval = restoreInterval(forCPU: cpu)
+                    // AC-620: power-slope pacing — a steep curve or tight charger
+                    // headroom (low wattage / aged battery / low charge) lengthens
+                    // the wait so the restore never spikes the power curve into a
+                    // battery-protection shutdown.
+                    let ps = testHooks.powerSampler?() ?? Self.samplePower(powerReader)
+                    let powerInterval = powerRestoreInterval(
+                        currentPowerW: ps.power, chargerWatts: ps.charger,
+                        batteryHealth: ps.health, batteryLevel: ps.level,
+                        measuredSlope: lastSlope)
+                    let interval = max(cpuInterval, powerInterval)
                     let nextName = self.displayName(for: appId, using: apps)
                     DispatchQueue.main.async {
                         self.restorePhase = .waiting(intervalSec: interval)
                         self.nextRestoreName = nextName
                     }
-                    ctx.log("等待 \(Int(interval))s 再恢复下一个（CPU \(Int(cpu))%）")
+                    ctx.log("等待 \(Int(interval))s 再恢复下一个（CPU \(Int(cpu))%，功耗坡度 \(Int(lastSlope * 100))mW/s，余量 \(Int(ps.charger - ps.power))W）")
                     testHooks.sleep(interval)
                 }
 
+                // Power-curve slope measurement around the launch: sample before
+                // and after, so the observed dW/dt feeds the NEXT interval.
+                let pBefore = testHooks.powerSampler?() ?? Self.samplePower(powerReader)
+                let tBefore = Date()
                 let name = self.displayName(for: appId, using: apps)
                 DispatchQueue.main.async {
                     self.restorePhase = .restoring(name: name)
@@ -307,6 +430,9 @@ extension ProcessKiller {
                 } else {
                     restoreCtx.log("恢复 \(appId) 失败")
                 }
+                let pAfter = testHooks.powerSampler?() ?? Self.samplePower(powerReader)
+                let dt = Date().timeIntervalSince(tBefore)
+                lastSlope = dt > 0 ? (pAfter.power - pBefore.power) / dt : 0
                 DispatchQueue.main.async {
                     self.restoreDone = i + 1
                 }

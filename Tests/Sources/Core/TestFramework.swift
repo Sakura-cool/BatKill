@@ -137,6 +137,54 @@ func XCTAssertEqualWithAccuracy(_ lhs: Double, _ rhs: Double, accuracy: Double, 
     }
 }
 
+/// Assert that `lhs` is strictly greater than `rhs`.
+func XCTAssertGreaterThan<T: Comparable>(_ lhs: T, _ rhs: T, _ message: String = "", file: String = #file, line: Int = #line) {
+    if lhs > rhs {
+        TestResults.shared.recordPass()
+    } else {
+        let testName = "\(file):\(line)"
+        let msg = message.isEmpty ? "Expected \(lhs) to be greater than \(rhs)" : message
+        TestResults.shared.recordFail(test: testName, message: msg)
+        print("  ❌ FAIL: \(msg)")
+    }
+}
+
+/// Assert that `lhs` is greater than or equal to `rhs`.
+func XCTAssertGreaterThanOrEqual<T: Comparable>(_ lhs: T, _ rhs: T, _ message: String = "", file: String = #file, line: Int = #line) {
+    if lhs >= rhs {
+        TestResults.shared.recordPass()
+    } else {
+        let testName = "\(file):\(line)"
+        let msg = message.isEmpty ? "Expected \(lhs) to be ≥ \(rhs)" : message
+        TestResults.shared.recordFail(test: testName, message: msg)
+        print("  ❌ FAIL: \(msg)")
+    }
+}
+
+/// Assert that `lhs` is strictly less than `rhs`.
+func XCTAssertLessThan<T: Comparable>(_ lhs: T, _ rhs: T, _ message: String = "", file: String = #file, line: Int = #line) {
+    if lhs < rhs {
+        TestResults.shared.recordPass()
+    } else {
+        let testName = "\(file):\(line)"
+        let msg = message.isEmpty ? "Expected \(lhs) to be less than \(rhs)" : message
+        TestResults.shared.recordFail(test: testName, message: msg)
+        print("  ❌ FAIL: \(msg)")
+    }
+}
+
+/// Assert that `lhs` is less than or equal to `rhs`.
+func XCTAssertLessThanOrEqual<T: Comparable>(_ lhs: T, _ rhs: T, _ message: String = "", file: String = #file, line: Int = #line) {
+    if lhs <= rhs {
+        TestResults.shared.recordPass()
+    } else {
+        let testName = "\(file):\(line)"
+        let msg = message.isEmpty ? "Expected \(lhs) to be ≤ \(rhs)" : message
+        TestResults.shared.recordFail(test: testName, message: msg)
+        print("  ❌ FAIL: \(msg)")
+    }
+}
+
 // MARK: - Test Case Protocol
 
 /// A test case that can be executed by the test runner.

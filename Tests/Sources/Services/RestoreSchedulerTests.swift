@@ -44,6 +44,7 @@ final class RestoreSchedulerTests: TestCase {
         testSerialScheduling()
         testNotificationGrouping()
         testOrderedRestorePaths()
+        testPowerSlopePacing()
     }
 
     // MARK: - restoreInterval(forCPU:) boundaries
@@ -360,6 +361,62 @@ final class RestoreSchedulerTests: TestCase {
         runTest("保序并集：完全重叠 → killed 顺序（无重复）") {
             XCTAssertEqual(orderedRestorePaths(["/A.app", "/B.app"], ["/A.app", "/B.app"]),
                            ["/A.app", "/B.app"])
+        }
+    }
+
+    // MARK: - Power-slope restore pacing (v0.2.6, AC-620)
+
+    func testPowerSlopePacing() {
+        // allowedPowerSlope: dynamic, never hard-coded. Healthy + ample headroom
+        // must permit a higher slope than aged / low-charge / tight-headroom states.
+        let ample = allowedPowerSlope(headroomW: 15, batteryHealth: 1.0, batteryLevel: 1.0)
+        let tight = allowedPowerSlope(headroomW: 0, batteryHealth: 1.0, batteryLevel: 1.0)
+        let aged  = allowedPowerSlope(headroomW: 15, batteryHealth: 0.5, batteryLevel: 1.0)
+        let low   = allowedPowerSlope(headroomW: 15, batteryHealth: 1.0, batteryLevel: 0.2)
+        runTest("坡度：健康+富余 > 紧余量/老化/低电量（动态，非写死）") {
+            XCTAssertGreaterThan(ample, tight)
+            XCTAssertGreaterThan(ample, aged)
+            XCTAssertGreaterThan(ample, low)
+        }
+        // Clamping: negative headroom treated as 0; >15W capped at full factor.
+        runTest("坡度：负余量按 0 处理，>15W 封顶") {
+            XCTAssertEqual(allowedPowerSlope(headroomW: -5, batteryHealth: 1, batteryLevel: 1),
+                           allowedPowerSlope(headroomW: 0, batteryHealth: 1, batteryLevel: 1))
+            XCTAssertEqual(allowedPowerSlope(headroomW: 99, batteryHealth: 1, batteryLevel: 1),
+                           allowedPowerSlope(headroomW: 15, batteryHealth: 1, batteryLevel: 1))
+        }
+        // Monotonic in each runtime factor.
+        runTest("坡度：各因子单调不减") {
+            XCTAssertLessThanOrEqual(
+                allowedPowerSlope(headroomW: 5, batteryHealth: 0.6, batteryLevel: 0.6),
+                allowedPowerSlope(headroomW: 10, batteryHealth: 0.6, batteryLevel: 0.6))
+            XCTAssertLessThanOrEqual(
+                allowedPowerSlope(headroomW: 5, batteryHealth: 0.5, batteryLevel: 0.8),
+                allowedPowerSlope(headroomW: 5, batteryHealth: 0.9, batteryLevel: 0.8))
+            XCTAssertLessThanOrEqual(
+                allowedPowerSlope(headroomW: 5, batteryHealth: 0.8, batteryLevel: 0.4),
+                allowedPowerSlope(headroomW: 5, batteryHealth: 0.8, batteryLevel: 0.9))
+        }
+        // powerRestoreInterval: steep slope lengthens, gentle shortens; clamp [2,20].
+        runTest("间隔：陡坡 > 缓坡；紧余量放大；夹在 [2,20]") {
+            let steep = powerRestoreInterval(currentPowerW: 10, chargerWatts: 65,
+                                             batteryHealth: 1, batteryLevel: 1, measuredSlope: 20)
+            let gentle = powerRestoreInterval(currentPowerW: 10, chargerWatts: 65,
+                                              batteryHealth: 1, batteryLevel: 1, measuredSlope: 0.1)
+            XCTAssertGreaterThan(steep, gentle)
+            let tightHeadroom = powerRestoreInterval(currentPowerW: 60, chargerWatts: 65,
+                                                     batteryHealth: 1, batteryLevel: 1, measuredSlope: 0)
+            let looseHeadroom = powerRestoreInterval(currentPowerW: 10, chargerWatts: 65,
+                                                     batteryHealth: 1, batteryLevel: 1, measuredSlope: 0)
+            XCTAssertGreaterThanOrEqual(tightHeadroom, looseHeadroom)
+            XCTAssertGreaterThanOrEqual(gentle, 2)
+            XCTAssertLessThanOrEqual(steep, 20)
+        }
+        // Degraded fallback: zero headroom + steep slope caps at the 20s ceiling.
+        runTest("间隔：零余量+陡坡 → 上限 20s") {
+            let worst = powerRestoreInterval(currentPowerW: 65, chargerWatts: 65,
+                                             batteryHealth: 0.3, batteryLevel: 0.1, measuredSlope: 99)
+            XCTAssertEqual(worst, 20)
         }
     }
 }

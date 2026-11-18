@@ -32,4 +32,28 @@ extension AppDelegate {
         default: resolveContactIssue(.stop)
         }
     }
+
+    /// Appends the charger's rated power and the current whole-system power
+    /// draw to a state-change notification body (AC-620), so the user can see
+    /// how much headroom the connected charger has. When the charger is small
+    /// (tight headroom, <8W above the current draw — the same tier that
+    /// lengthens `powerRestoreInterval`), appends a hint that restore time is
+    /// extended. Degrades gracefully (returns `body` unchanged) when the
+    /// AppleSmartBattery registry is unavailable, e.g. on battery power.
+    func powerHintBody(_ body: String) -> String {
+        let reader = PowerLoadReader()
+        guard let charger = reader.chargerWatts(),
+              let power = reader.currentPowerWatts() else {
+            return body
+        }
+        let base = body + "\n" + localizationManager.translate(
+            "Charger: \(Int(charger))W max · Using: \(Int(power))W",
+            "充电器最大功率：\(Int(charger))W · 当前使用：\(Int(power))W")
+        if charger - power < 8 {
+            return base + "\n" + localizationManager.translate(
+                "Low charger power — restore time extended",
+                "充电器功率较小，恢复时间将延长")
+        }
+        return base
+    }
 }

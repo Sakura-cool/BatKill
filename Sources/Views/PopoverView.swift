@@ -246,11 +246,14 @@ struct PopoverView: View {
     }
 
     /// Explains what the badge count means in the current power context.
+    /// The badge always shows `pendingRestoreCount` (待恢复数, per the badge
+    /// semantic fix), so both branches describe the pending-restore set — on
+    /// battery those apps are stopped awaiting AC, on AC they will restore.
     private var explanationText: String {
         if batteryMonitor.isOnBattery {
             return lm.translate(
-                "\(badgeCount) app(s) will be killed on battery",
-                "\(badgeCount) 个应用将在电池时停止"
+                "\(badgeCount) app(s) waiting to restore on AC",
+                "\(badgeCount) 个应用等待接电恢复"
             )
         } else {
             return lm.translate(

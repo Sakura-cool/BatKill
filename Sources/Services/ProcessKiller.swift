@@ -204,13 +204,8 @@ final class ProcessKiller: ObservableObject {
         }
     }
 
-    /// Restores only the selected apps that are in the pending restore list.
-    /// Used by the UI's manual restore button for selective recovery.
-    ///
-    /// - Parameter selectedPaths: the persisted selection (from `AppLister`),
-    ///   matched against the pending list so pending apps stay reachable even
-    ///   after they drop out of the live `apps` list. Apps that fail to
-    ///   restore are left in the pending list.
+    /// Restores only the selected apps in the pending list (UI selective
+    /// recovery). Apps that fail to restore stay pending.
     func restoreSelected(_ apps: [AppItem], selectedPaths: Set<String>, completion: (() -> Void)? = nil) {
         // Union of killed (relaunch) + suspended (resume) pending apps, in list order (AC-603/S3).
         let pending = orderedRestorePaths(killedRestorePaths, suspendedPaths)
@@ -260,16 +255,8 @@ final class ProcessKiller: ObservableObject {
 
     // MARK: - Kill (Public API)
 
-    /// Terminates all selected and running apps, tracking them for
-    /// automatic restore when AC power returns.
-    ///
-    /// Runs on a background queue. Updates `lastKillResults`, `killCount`,
-    /// and the persisted restore list on completion.
-    ///
-    /// - Parameters:
-    ///   - apps: Full app list; only items with `isSelected && isRunning` are killed.
-    ///   - trackForRestore: Whether to add successfully killed apps to the restore list.
-    ///   - completion: Called on the main thread when the operation finishes.
+    /// Terminates selected + running apps, tracking them for auto-restore on
+    /// AC. Runs on a background queue; updates results/counts/persisted list.
     func killSelected(_ apps: [AppItem], trackForRestore: Bool = true, context: LogContext? = nil, completion: (() -> Void)? = nil) {
         let ctx = context ?? LogContext(name: "killSelected")
         let selected = apps.filter { $0.isSelected && $0.isRunning }
@@ -327,13 +314,16 @@ final class ProcessKiller: ObservableObject {
 
     // MARK: - Restore (Public API)
 
-    /// Restores ALL apps in the persisted kill list. Called automatically
-    /// when AC power is detected, or manually by the user.
-    ///
-    /// Runs on a background thread, clears the restore list on completion,
-    /// and posts a notification with the names of restored apps.
+    /// Restores ALL apps in the persisted kill list (auto on AC, or manual).
+    /// Runs on a background thread; clears the restore list on completion.
     func restoreKilledApps(using apps: [AppItem], context: LogContext? = nil, completion: (() -> Void)? = nil) {
         let ctx = context ?? LogContext(name: "restoreKilledApps")
+        // S4: one restore at a time; reject a concurrent start (no overlap).
+        guard !isRestoring else {
+            logger("restoreKilledApps: 恢复已在进行，忽略重复启动")
+            completion?()
+            return
+        }
         // Union of killed apps (relaunch) and suspended apps (SIGCONT resume);
         // never both in one list, but robust against stale entries. Preserves
         // the pending list's order (AC-603 / S3).
@@ -352,7 +342,10 @@ final class ProcessKiller: ObservableObject {
         let session = restoreSession + 1
         restoreSession = session
         isRestoring = true
-        restoreGateState = .restoring
+        // S3: preserve a held low-battery gate; the completion keeps it intact.
+        if restoreGateState != .delayedLowBattery {
+            restoreGateState = .restoring
+        }
         restoreTotal = paths.count
         restoreDone = 0
 
@@ -362,8 +355,8 @@ final class ProcessKiller: ObservableObject {
             var restoredIds: [String] = []
 
             for (i, appId) in paths.enumerated() {
-                // Batch loop has no wait points; honor cancellation between items.
-                if self.restoreCancelled { break }
+                // Batch loop has no wait points; honor cancel + stale-run stop (S4).
+                if self.restoreCancelled || self.restoreSession != session { break }
                 let name = self.displayName(for: appId, using: apps)
                 DispatchQueue.main.async {
                     self.restorePhase = .restoring(name: name)
@@ -421,13 +414,9 @@ final class ProcessKiller: ObservableObject {
 
     // MARK: - Single App Restore
 
-    /// Attempts to restore a single app by its ID. Returns the display
-    /// name if restore succeeded (or app was already running), `nil` otherwise.
-    ///
-    /// Restore strategy varies by category:
-    /// - `.application`: `NSWorkspace.shared.open()` (skips if already running)
-    /// - `.launchAgent`: `launchctl bootstrap gui/<uid>/<path>`
-    /// - `.service`: direct start -> brew services start -> launchctl bootstrap
+    /// Restores a single app by ID; returns the display name on success (or
+    /// if already running), `nil` otherwise. Strategy varies by category:
+    /// `.application` open / `.launchAgent` bootstrap / `.service` start.
     func restoreSingleApp(_ appId: String, using apps: [AppItem]) -> String? {
         // Suspend mode: `SIGCONT` resume the frozen process in place, preserving
         // its exact state. If the process is gone (rebooted / manually quit),
