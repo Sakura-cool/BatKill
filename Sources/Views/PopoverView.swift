@@ -152,11 +152,20 @@ struct PopoverView: View {
                 .disabled(quickActionDisabled)
             }
 
-            // ── Status Info ──
-            // Total app count and running count summary
-            Text(statusInfo)
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            // ── Status Info / Restore Progress ──
+            // When a restore is in flight, the static app summary gives way
+            // to a compact linear progress bar so the narrow popover surfaces
+            // live restore progress (design-spec §2.2). Reads ProcessKiller's
+            // @Published progress fields only -- no business-logic calls here.
+            // The bar vanishes with `isRestoring` when the run completes.
+            if processKiller.isRestoring {
+                restoreProgressBar
+            } else {
+                // Total app count and running count summary
+                Text(statusInfo)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
         }
         .padding()
         .frame(width: 260)
@@ -256,5 +265,55 @@ struct PopoverView: View {
         let total = appLister.apps.count
         let running = appLister.apps.filter(\.isRunning).count
         return lm.translate("\(total) apps · \(running) running", "共 \(total) 个 · \(running) 运行中")
+    }
+
+    // MARK: - Restore Progress (compact popover variant)
+
+    /// Compact linear restore progress bar tailored to the 260pt popover: a
+    /// slim ProgressView plus a single-line caption. Reads ProcessKiller's
+    /// published progress directly (the same source as the shared
+    /// RestoreProgressRow in SettingsView) but keeps the caption to one line
+    /// -- the wait-interval segment is dropped -- so it never wraps in the
+    /// narrow panel.
+    private var restoreProgressBar: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ProgressView(
+                value: Double(processKiller.restoreDone),
+                total: Double(max(processKiller.restoreTotal, 1))
+            )
+            .progressViewStyle(.linear)
+            .controlSize(.small)
+            .tint(.green)
+
+            Text(restoreProgressCaption)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Single-line progress caption reusing the shared translation keys
+    /// ("Restored %d / %d", "Restoring %@…", "Next: %@") so wording matches
+    /// SettingsView / PendingRestoreSheet. The wait-interval segment is
+    /// intentionally omitted to keep the line within 260pt.
+    private var restoreProgressCaption: String {
+        let restored = lm.translate(
+            "Restored %d / %d",
+            "已恢复 %d / %d",
+            processKiller.restoreDone,
+            processKiller.restoreTotal
+        )
+        switch processKiller.restorePhase {
+        case .waiting:
+            let name = processKiller.nextRestoreName ?? "—"
+            let next = lm.translate("Next: %@", "下一个：%@", name)
+            return "\(restored) · \(next)"
+        case .restoring(let name):
+            let restoring = lm.translate("Restoring %@…", "正在恢复 %@…", name)
+            return "\(restored) · \(restoring)"
+        case .idle:
+            return restored
+        }
     }
 }
