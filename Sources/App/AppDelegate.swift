@@ -73,10 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     /// has been shown at least once.
     private var hasAppeared      = false
 
-    /// Reference to the settings window so we can avoid creating duplicates.
-    /// Not `private`: `presentContactIssue` needs it to pick the prompt route
-    /// (SwiftUI `.alert` vs the NSAlert fallback).
-    var settingsWindow: NSWindow?
+    /// Reference to the settings window so we can avoid creating duplicates and
+    /// so sheet-style prompts (usage guide) can attach to it.
+    private var settingsWindow: NSWindow?
 
     /// Reference to the temperature/hardware-monitor window.
     private var temperatureWindow: NSWindow?
@@ -96,11 +95,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     private var cancellables     = Set<AnyCancellable>()
 
     // MARK: - Restore Gating & Contact Issue (v0.2.6)
-
-    /// Drives the power contact-issue choice dialog (AC-614). Set `true` when
-    /// >= 3 AC/battery flips are detected within a 10s window; cleared when the
-    /// user resolves the issue via `resolveContactIssue(_:)`.
-    @Published var showContactIssueDialog = false
 
     /// Final power state when the contact-issue prompt last fired (AC-614): on
     /// battery the prompt must not offer "continue restore" (auto-restore only
@@ -936,7 +930,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
     /// `.ignore` (continue), or `.stop` (cancel restore, stay stopped).
     func resolveContactIssue(_ choice: ContactIssueChoice) {
         contactIssue = false
-        showContactIssueDialog = false
         rapidDeclineNotified = false
         // One dialog per episode (真机反馈: 弹窗不要多个).
         contactIssueCooldownUntil = Date().addingTimeInterval(ContactIssuePrompt.cooldown)

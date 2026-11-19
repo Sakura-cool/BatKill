@@ -1,11 +1,13 @@
 //  ContactIssueDialog.swift
 //  BatKill
 //
-//  Power contact-issue prompt (design-spec §6.2, AC-614). While the settings
-//  window is visible the prompt is a SwiftUI `.alert` bound to
-//  `AppDelegate.showContactIssueDialog`; in menu-bar-only use (window closed)
-//  `presentContactIssueNSAlert` shows a modal NSAlert with the same choices,
-//  mapped 1:1 to `resolveContactIssue`.
+//  Power contact-issue prompt (design-spec §6.2, AC-614). Always one
+//  standalone modal NSAlert — never a SwiftUI `.alert` bound to the settings
+//  window (CHANGE-082): that route tied presentation to the host window's
+//  visible/key state, which for this LSUIElement (no-Dock) app could leave a
+//  must-respond prompt unpresented, and left a stale flag behind when the
+//  window closed mid-prompt. Choices come from `ContactIssuePrompt` and map
+//  1:1 to `resolveContactIssue`.
 //
 //  The prompt content follows the FINAL power state at the end of the
 //  detection window (真机反馈): on battery power auto-restore is meaningless —
@@ -55,24 +57,20 @@ enum ContactIssuePrompt {
 }
 
 extension AppDelegate {
-    /// Presents the contact-issue prompt for the FINAL power state, routing to
-    /// the SwiftUI `.alert` when the settings window is visible and to a single
-    /// modal NSAlert otherwise — never both.
+    /// Presents the contact-issue prompt for the FINAL power state as a single
+    /// standalone modal NSAlert, regardless of whether the settings window is
+    /// open (CHANGE-082).
     func presentContactIssue(onBattery: Bool) {
         contactIssueOnBattery = onBattery
-        if settingsWindow?.isVisible == true {
-            showContactIssueDialog = true
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                self?.presentContactIssueNSAlert(onBattery: onBattery)
-            }
+        DispatchQueue.main.async { [weak self] in
+            self?.presentContactIssueNSAlert(onBattery: onBattery)
         }
     }
 
-    /// Modal NSAlert fallback for menu-bar-only use. `runModal` blocks the UI
-    /// loop until the user chooses, which is the intended modal behavior for
-    /// this rare, must-respond state. Buttons follow the final power state and
-    /// map 1:1 to `resolveContactIssue`.
+    /// Standalone modal NSAlert. `runModal` blocks the UI loop until the user
+    /// chooses, which is the intended modal behavior for this rare, must-respond
+    /// state. Buttons follow the final power state and map 1:1 to
+    /// `resolveContactIssue`.
     func presentContactIssueNSAlert(onBattery: Bool) {
         let alert = NSAlert()
         alert.messageText = loc("Power contact unstable", "电源接触不良")
@@ -81,6 +79,11 @@ extension AppDelegate {
         for choice in choices {
             alert.addButton(withTitle: ContactIssuePrompt.title(choice, onBattery: onBattery))
         }
+        // Bring BatKill to the foreground before the modal loop: the app is
+        // LSUIElement (no Dock icon), so presenting from the background would
+        // leave the alert hidden behind the frontmost app — and this prompt is
+        // must-respond.
+        NSApp.activate()
         // ModalResponse.rawValue: 1000 = first button, 1001 = second, and so on.
         let response = alert.runModal()
         let index = max(0, response.rawValue - 1000)
