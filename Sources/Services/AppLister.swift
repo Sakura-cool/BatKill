@@ -163,6 +163,31 @@ final class AppLister: ObservableObject {
 
     // MARK: - App Discovery (5-Phase Process)
 
+    /// Whether a discovered app is BatKill itself.
+    ///
+    /// Self must never be a kill/suspend/restore candidate: suspending (CHANGE-005
+    /// suspend mode) calls `kill(getpid(), SIGSTOP)`, which freezes the very
+    /// process that has to send `SIGCONT` when AC returns — a permanent deadlock
+    /// with no in-app way out (CHANGE-084).
+    ///
+    /// Pure so the rule is unit-testable without a live bundle.
+    static func isSelfApp(_ path: String, bundleIdentifier: String?,
+                          selfPath: String, selfBundleIdentifier: String?) -> Bool {
+        if let id = bundleIdentifier, let selfID = selfBundleIdentifier,
+           !id.isEmpty, id == selfID { return true }
+        return !path.isEmpty && path == selfPath
+    }
+
+    /// Bundle-aware wrapper: BatKill is recognized both by its bundle identifier
+    /// (`com.batkill.app`, covering an installed `/Applications/BatKill.app`) and
+    /// by its own bundle path (covering a dev build such as
+    /// `.build/arm64/BatKill-arm64.app`, whose path differs between builds).
+    static func isSelfApp(path: String, bundleIdentifier: String?) -> Bool {
+        isSelfApp(path, bundleIdentifier: bundleIdentifier,
+                  selfPath: Bundle.main.bundlePath,
+                  selfBundleIdentifier: Bundle.main.bundleIdentifier)
+    }
+
     /// Builds the complete app list by running all 5 discovery phases
     /// and merging results. Deduplicates by path, sorts by running
     /// status then alphabetically.
@@ -187,6 +212,12 @@ final class AppLister: ObservableObject {
                 guard seen.insert(fullPath).inserted else { continue }
 
                 let bundle = Bundle(path: fullPath)
+                // Never list BatKill itself — it cannot kill or restore
+                // its own way out (CHANGE-084).
+                if AppLister.isSelfApp(path: fullPath,
+                                       bundleIdentifier: bundle?.bundleIdentifier) {
+                    continue
+                }
                 let name = (bundle?.localizedInfoDictionary?["CFBundleDisplayName"] as? String)
                     ?? (bundle?.infoDictionary?["CFBundleDisplayName"] as? String)
                     ?? (item as NSString).deletingPathExtension
@@ -218,6 +249,10 @@ final class AppLister: ObservableObject {
                   seen.insert(path).inserted else { continue }
 
             let isSystem = path.contains("/System/")
+            // `runningApplications` always contains BatKill itself, so this
+            // phase needs its own filter as well (CHANGE-084).
+            if AppLister.isSelfApp(path: path,
+                                   bundleIdentifier: app.bundleIdentifier) { continue }
             result.append(AppItem(
                 name: name,
                 bundleIdentifier: app.bundleIdentifier,

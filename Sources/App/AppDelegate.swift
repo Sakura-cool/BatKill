@@ -404,44 +404,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, Obse
         }
     }
 
-    /// Compact usage-guide body (no install steps; the app is running).
-    private func usageGuideText() -> String {
-        localizationManager.translate(
-            "Battery saver:\n"
-            + "1. Click the menu-bar battery icon → Settings\n"
-            + "2. Tick apps to auto-stop on battery\n"
-            + "3. Unplug → apps close after 30s; replug → they restore\n\n"
-            + "Fan control:\n"
-            + "1. Open the temperature window\n"
-            + "2. First use: tap Enable Fan Control, enter admin password once\n"
-            + "3. Per fan pick Auto / Fixed / Curve\n"
-            + "   - Auto: system-managed\n"
-            + "   - Fixed: drag the slider (applies after 0.1s)\n"
-            + "   - Curve: edit nodes on the chart (applies after 0.1s)\n"
-            + "4. Status badge next to the picker shows Applied/Applying\n\n"
-            + "Presets:\n"
-            + "Save the current layout, apply or delete saved presets.\n\n"
-            + "Threshold guard:\n"
-            + "Set 60-120°C; above it fans return to system control.",
-            "电池省电：\n"
-            + "1. 点菜单栏电池图标 → 设置\n"
-            + "2. 勾选电池供电时自动停止的软件\n"
-            + "3. 拔电源 → 30 秒后自动关闭；插回 → 自动恢复\n\n"
-            + "风扇控制：\n"
-            + "1. 打开温度窗口\n"
-            + "2. 首次使用：点「启用风扇控制」并输入一次管理员密码\n"
-            + "3. 每把风扇可选 自动 / 定速 / 调速\n"
-            + "   - 自动：交还系统控制\n"
-            + "   - 定速：拖动滑块（0.1 秒后生效）\n"
-            + "   - 调速：编辑曲线节点（0.1 秒后生效）\n"
-            + "4. 模式行状态徽标显示「已生效/生效中」\n\n"
-            + "预设：\n"
-            + "保存当前布局，一键应用或删除预设。\n\n"
-            + "温度阈值保护：\n"
-            + "设置 60-120°C，超过后风扇自动交还系统。"
-        )
-    }
-
     /// Opens the project's GitHub repository in the default browser when the
     /// title-bar app name is clicked.
     @objc private func titleBarNameClicked() {

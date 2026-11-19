@@ -13,6 +13,7 @@ struct TestMain {
     static func main() {
         // Register all test cases
         TestRunner.register("AppItemTests") { AppItemTests() }
+        TestRunner.register("AppListerTests") { AppListerTests() }
         TestRunner.register("FanPresetTests") { FanPresetTests() }
         TestRunner.register("FanCurveTests") { FanCurveTests() }
         TestRunner.register("ThresholdStoreTests") { ThresholdStoreTests() }
