@@ -9,6 +9,11 @@
 //  window closed mid-prompt. Choices come from `ContactIssuePrompt` and map
 //  1:1 to `resolveContactIssue`.
 //
+//  While the prompt is open it is watched live (CHANGE-083): an unplug that
+//  holds for `ContactIssuePrompt.unplugConfirmDelay` (5s, guarding against a
+//  loose/flapping connector misreading as a real unplug) re-presents it with a
+//  single acknowledgement, because restore only ever runs on AC.
+//
 //  The prompt content follows the FINAL power state at the end of the
 //  detection window (真机反馈): on battery power auto-restore is meaningless —
 //  restore only runs on AC — so the battery variant never asks "continue
@@ -26,10 +31,21 @@ enum ContactIssuePrompt {
     /// flapping connection pops at most one dialog per episode (弹窗不要多个).
     static let cooldown: TimeInterval = 60
 
+    /// How long an unplug must persist while the prompt is open before it degrades
+    /// to a single acknowledgement (CHANGE-083). An immediate read is
+    /// unreliable under a loose/flapping connector (虚接), so a real unplug is
+    /// only trusted once it holds for this long.
+    static let unplugConfirmDelay: TimeInterval = 5
+
     /// Choices offered, in order. Battery (离电) drops the restore options.
     static func choices(onBattery: Bool) -> [ContactIssueChoice] {
         onBattery ? [.ignore, .stop] : [.pause, .ignore, .stop]
     }
+
+    /// Choices for the degraded prompt (CHANGE-083): power was unplugged while it
+    /// was open, so every restore choice is meaningless and a single
+    /// acknowledgement is offered. Maps to `.pause`, the safe default.
+    static func degradedChoices() -> [ContactIssueChoice] { [.pause] }
 
     /// Button label for a choice. `.ignore` reads differently on battery, where
     /// there is no restore sequence to continue.
@@ -54,6 +70,18 @@ enum ContactIssuePrompt {
             : loc("Repeated power switching detected — possible loose contact",
                   "检测到电源反复切换，可能接触不良")
     }
+
+    /// Reuses the existing `OK / 知道了` key — no new localization surface
+    /// (CHANGE-083).
+    static func degradedTitle() -> String { loc("OK", "知道了") }
+
+    /// Body for the degraded prompt: states that the power was unplugged while
+    /// it was open (CHANGE-083).
+    static func degradedInformative() -> String {
+        loc("Power was unplugged while this dialog was open. The restore sequence "
+            + "has stopped — relaunch what you need manually.",
+            "弹窗期间检测到电源已断开，恢复已中止——请手动启动需要的软件。")
+    }
 }
 
 extension AppDelegate {
@@ -68,26 +96,88 @@ extension AppDelegate {
     }
 
     /// Standalone modal NSAlert. `runModal` blocks the UI loop until the user
-    /// chooses, which is the intended modal behavior for this rare, must-respond
-    /// state. Buttons follow the final power state and map 1:1 to
-    /// `resolveContactIssue`.
+    /// chooses — the intended modal behavior for this rare, must-respond state.
+    ///
+    /// While it is open, an unplug that PERSISTS for `unplugConfirmDelay` (5s)
+    /// re-presents it degraded to a single acknowledgement (CHANGE-083): restore
+    /// only ever runs on AC, so every restore choice is then meaningless. The
+    /// 5s hold avoids a false positive from a loose/flapping connector (虚接) —
+    /// an immediate read would degrade spuriously.
     func presentContactIssueNSAlert(onBattery: Bool) {
+        var promptOnBattery = onBattery
+        var degraded = false
+        while true {
+            var superseded = false
+            var presenting = false
+            var unplugSince: Date?
+            // `.common` modes include the modal-panel mode, so the watch keeps
+            // firing while `runModal` blocks the main thread.
+            let unplugWatch = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+                guard let self, presenting, !superseded, !promptOnBattery else { return }
+                // Read IOKit directly rather than trusting the IOKit async
+                // dispatch, which may not be drained while the modal session owns
+                // the run loop.
+                self.batteryMonitor.checkPowerState()
+                guard self.batteryMonitor.isOnBattery else {
+                    // Back on AC within the window: contact chatter (虚接), not a
+                    // real unplug — restart the confirmation.
+                    unplugSince = nil
+                    return
+                }
+                let since = unplugSince ?? Date()
+                unplugSince = since
+                guard Date().timeIntervalSince(since) >= ContactIssuePrompt.unplugConfirmDelay
+                else { return }
+                superseded = true
+                self.contactIssueOnBattery = true
+                logger("contactIssue: 弹窗期间拔电已持续 "
+                    + "\(Int(ContactIssuePrompt.unplugConfirmDelay))s，降级为单按钮「知道了」")
+                NSApp.stopModal()
+            }
+            RunLoop.main.add(unplugWatch, forMode: .common)
+
+            let (alert, choices) = contactIssueAlert(onBattery: promptOnBattery, degraded: degraded)
+            // Bring BatKill to the foreground before the modal loop: the app is
+            // LSUIElement (no Dock icon), so presenting from the background would
+            // leave the alert hidden behind the frontmost app — and this prompt
+            // is must-respond.
+            NSApp.activate()
+            presenting = true
+            // ModalResponse.rawValue: 1000 = first button, 1001 = second, and so on.
+            let response = alert.runModal()
+            presenting = false
+            unplugWatch.invalidate()
+
+            guard !superseded else {
+                degraded = true
+                promptOnBattery = true
+                continue
+            }
+            let index = max(0, response.rawValue - 1000)
+            resolveContactIssue(choices[min(index, choices.count - 1)])
+            break
+        }
+    }
+
+    /// Builds the prompt alert for one presentation. `degraded` is the live-
+    /// unplug variant (CHANGE-083). Returns the alert with its choice set so the
+    /// button response maps back 1:1.
+    private func contactIssueAlert(onBattery: Bool, degraded: Bool)
+        -> (NSAlert, [ContactIssueChoice]) {
         let alert = NSAlert()
         alert.messageText = loc("Power contact unstable", "电源接触不良")
-        alert.informativeText = ContactIssuePrompt.informative(onBattery: onBattery)
-        let choices = ContactIssuePrompt.choices(onBattery: onBattery)
+        let choices = degraded
+            ? ContactIssuePrompt.degradedChoices()
+            : ContactIssuePrompt.choices(onBattery: onBattery)
+        alert.informativeText = degraded
+            ? ContactIssuePrompt.degradedInformative()
+            : ContactIssuePrompt.informative(onBattery: onBattery)
         for choice in choices {
-            alert.addButton(withTitle: ContactIssuePrompt.title(choice, onBattery: onBattery))
+            alert.addButton(withTitle: degraded
+                ? ContactIssuePrompt.degradedTitle()
+                : ContactIssuePrompt.title(choice, onBattery: onBattery))
         }
-        // Bring BatKill to the foreground before the modal loop: the app is
-        // LSUIElement (no Dock icon), so presenting from the background would
-        // leave the alert hidden behind the frontmost app — and this prompt is
-        // must-respond.
-        NSApp.activate()
-        // ModalResponse.rawValue: 1000 = first button, 1001 = second, and so on.
-        let response = alert.runModal()
-        let index = max(0, response.rawValue - 1000)
-        resolveContactIssue(choices[min(index, choices.count - 1)])
+        return (alert, choices)
     }
 
     /// Appends the charger's rated power and the current whole-system power

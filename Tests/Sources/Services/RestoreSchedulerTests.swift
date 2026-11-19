@@ -167,6 +167,34 @@ final class RestoreSchedulerTests: TestCase {
             XCTAssertTrue(ContactIssuePrompt.informative(onBattery: true).contains("电池供电"),
                 "电池态正文应说明当前为电池供电")
         }
+
+        runTest("降级弹窗（CHANGE-083）：弹窗期间拔电只留一个「知道了」选项") {
+            let choices = ContactIssuePrompt.degradedChoices()
+            XCTAssertEqual(choices.count, 1, "降级态必须只有一个选项")
+            XCTAssertEqual(choices, [.pause],
+                "拔电后恢复选项全部无意义，应收敛为单一确认（映射安全默认 .pause）")
+            XCTAssertFalse(choices.contains(.ignore) || choices.contains(.stop),
+                "降级态不应再提供恢复相关选项")
+        }
+
+        runTest("降级弹窗（CHANGE-083）：单按钮文案为「知道了」且不含「恢复」") {
+            let title = ContactIssuePrompt.degradedTitle()
+            XCTAssertTrue(title.contains("知道了"), "降级态是确认而非操作: \(title)")
+            XCTAssertFalse(title.contains("恢复"), "降级态不应提恢复: \(title)")
+        }
+
+        runTest("降级弹窗（CHANGE-083）：正文说明电源已断开") {
+            let body = ContactIssuePrompt.degradedInformative()
+            XCTAssertFalse(body.isEmpty, "降级态正文不应为空")
+            XCTAssertTrue(body.contains("断开"), "降级态正文应说明电源已断开: \(body)")
+        }
+
+        runTest("降级弹窗（CHANGE-083）：拔电需持续确认，避免虚接误判") {
+            XCTAssertGreaterThan(ContactIssuePrompt.unplugConfirmDelay, 0,
+                "确认时长必须为正，否则立即读取会把虚接误判为拔电")
+            XCTAssertEqual(ContactIssuePrompt.unplugConfirmDelay, 5,
+                "确认时长为 5s（真机验收反馈：立即读取可能虚接误判）")
+        }
     }
 
     // MARK: - Restore cancellation (restoreCancelled)
