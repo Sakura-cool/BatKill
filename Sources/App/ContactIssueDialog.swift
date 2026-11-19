@@ -153,6 +153,13 @@ extension AppDelegate {
                 promptOnBattery = true
                 continue
             }
+            // Esc / Cmd-. dismisses with NSModalResponse.abort (rawValue -1000),
+            // not a button index. Treat it as the safe default — pause restore,
+            // matching the passive-dismissal behavior of the old SwiftUI `.alert`.
+            if response == .abort {
+                resolveContactIssue(.pause)
+                break
+            }
             let index = max(0, response.rawValue - 1000)
             resolveContactIssue(choices[min(index, choices.count - 1)])
             break
